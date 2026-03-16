@@ -1,28 +1,10 @@
-# ============================
-# PATHS
-# ============================
-LOCAL_ROOT: /data/esplab
-MODEL_BASE: /data/esplab/nmme-backup
+# ============================================================
+# NMME + PyCPT Workflow Configuration (CLEAN BASELINE)
+# ============================================================
 
-nmme_data_root: /data/esplab/nmme-backup
-
-nmme_fcst_monthly: /data/esplab/shared/model/initialized/nmme/forecast/monthly
-nmme_fcst_seasonal: /data/esplab/shared/model/initialized/nmme/forecast/seasonal
-
-pycpt_output_root: /data/esplab/shared/model/initialized/nmme/forecast/pycpt
-
-# ============================
-# OBSERVATIONS / PREDICTAND
-# ============================
-
-PREDICTAND_DIR: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p05
-PREDICTAND_VAR: precip
-
-
-# ============================
-# MODELS (optional)
-# ============================
-
+# ------------------------------------------------------------
+# Models (single source of truth)
+# ------------------------------------------------------------
 models:
   - NASA-GEOSS2S
   - CanESM5
@@ -31,24 +13,9 @@ models:
   - COLA-RSMAS-CCSM4
 
 
-# ============================
-# MODEL VARIABLES
-# ============================
-
-MODEL_PR_VAR: pr
-
-# ============================
-# ENVIRONMENTS
-# ============================
-
-env_nmme: subxnmme
-env_pycpt: pycpt-2.8.2
-
-
-# ============================
-# PYCPT REGIONS
-# ============================
-#
+# ------------------------------------------------------------
+# PyCPT Regions
+# ------------------------------------------------------------
 pycpt_regions:
   - name: Mexico
     lat: [20, 33]
@@ -66,20 +33,63 @@ pycpt_regions:
     season: Feb-Apr
 
 
-# ============================
-# PIPELINE BEHAVIOR
-# ============================
+# ------------------------------------------------------------
+# Data Sources
+# ------------------------------------------------------------
+data:
 
-run_pycpt: true
-run_nmme_fcst_plots: true
+  # Switch between local data and download-based workflows
+  local:
+    enabled: true
 
-# Use local data paths (MODEL_BASE, PREDICTAND_DIR) instead of any remote/downloaders
-use_local_data: true
+    # Base directory for all locally stored NMME/PyCPT inputs
+    root: /data/esplab/nmme-backup
 
-# ============================
-# LOGGING
-# ============================
+    # Observations / predictand
+    predictand:
+      dir: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p05
+      var: precip
 
-log_dir: ./logs/
-keep_logs_days: 30
+    # Variable names used in model files
+    model_vars:
+      precipitation: pr
 
+    # Mapping from YAML model IDs → local directory names
+    # Required only when local directory names differ from model IDs
+    model_base:
+      NASA-GEOSS2S: GEOSS2S
+      CanESM5: CanESM5
+      GEM5.2-NEMO: GEM5.2-NEMO
+      NCEP-CFSv2: CFSv2
+      COLA-RSMAS-CCSM4: CCSM4
+
+
+  # Output locations
+  output:
+    pycpt: /data/esplab/shared/model/initialized/nmme/forecast/pycpt
+    nmme_monthly: /data/esplab/shared/model/initialized/nmme/forecast/monthly
+    nmme_seasonal: /data/esplab/shared/model/initialized/nmme/forecast/seasonal
+
+
+# ------------------------------------------------------------
+# Runtime Environments
+# ------------------------------------------------------------
+environments:
+  nmme: subxnmme
+  pycpt: pycpt-2.8.2
+
+
+# ------------------------------------------------------------
+# Pipeline Behavior
+# ------------------------------------------------------------
+pipeline:
+  run_pycpt: true
+  run_nmme_fcst_plots: true
+
+
+# ------------------------------------------------------------
+# Logging & Retention
+# ------------------------------------------------------------
+logging:
+  directory: ./logs/
+  keep_days: 30
