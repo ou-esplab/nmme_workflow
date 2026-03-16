@@ -1,0 +1,85 @@
+# ============================
+# PATHS
+# ============================
+LOCAL_ROOT: /data/esplab
+MODEL_BASE: /data/esplab/nmme-backup
+
+nmme_data_root: /data/esplab/nmme-backup
+
+nmme_fcst_monthly: /data/esplab/shared/model/initialized/nmme/forecast/monthly
+nmme_fcst_seasonal: /data/esplab/shared/model/initialized/nmme/forecast/seasonal
+
+pycpt_output_root: /data/esplab/shared/model/initialized/nmme/forecast/pycpt
+
+# ============================
+# OBSERVATIONS / PREDICTAND
+# ============================
+
+PREDICTAND_DIR: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p05
+PREDICTAND_VAR: precip
+
+
+# ============================
+# MODELS (optional)
+# ============================
+
+models:
+  - NASA-GEOSS2S
+  - CanESM5
+  - GEM5.2-NEMO
+  - NCEP-CFSv2
+  - COLA-RSMAS-CCSM4
+
+
+# ============================
+# MODEL VARIABLES
+# ============================
+
+MODEL_PR_VAR: pr
+
+# ============================
+# ENVIRONMENTS
+# ============================
+
+env_nmme: subxnmme
+env_pycpt: pycpt-2.8.2
+
+
+# ============================
+# PYCPT REGIONS
+# ============================
+#
+pycpt_regions:
+  - name: Mexico
+    lat: [20, 33]
+    lon: [-118, -97]
+    season: Feb-Apr
+
+  - name: Iran
+    lat: [24, 40]
+    lon: [40, 64]
+    season: Feb-Apr
+
+  - name: Venezuela
+    lat: [0, 13]
+    lon: [-73, -60]
+    season: Feb-Apr
+
+
+# ============================
+# PIPELINE BEHAVIOR
+# ============================
+
+run_pycpt: true
+run_nmme_fcst_plots: true
+
+# Use local data paths (MODEL_BASE, PREDICTAND_DIR) instead of any remote/downloaders
+use_local_data: true
+
+# ============================
+# LOGGING
+# ============================
+
+log_dir: ./logs/
+keep_logs_days: 30
+
