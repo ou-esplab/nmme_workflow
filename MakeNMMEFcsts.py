@@ -1,51 +1,104 @@
 #!/usr/bin/env python3
-# coding: utf-8
-import xarray as xr
-import numpy as np
-import pandas as pd
+"""
+Build NMME monthly forecast products.
+Supports dry-run mode (no plots / no NetCDF).
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
 from pathlib import Path
 from datetime import datetime
-import argparse
+import pandas as pd
 import warnings
-import sys
-import os
+
+from utils.config import load_config
+from utils.paths import ensure_dir
 from utils.nmme_products_utils import (
-    init_models, build_mme_for_month, nmme_plot, nmme_write
+    init_models,
+    build_mme_for_month,
+    nmme_plot,
+    nmme_write,
 )
+
 warnings.filterwarnings("ignore")
 
-parser = argparse.ArgumentParser(description="Build NMME forecast products from locally downloaded files.")
-parser.add_argument("--date", required=True, help="Forecast init date YYYYMM (e.g., 202603)")
-parser.add_argument("--data_root", default="/data/esplab/nmme-backup",
-                    help="Root of locally downloaded NMME files")
-parser.add_argument("--clim_path",
-                    default="/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020/",
-                    help="Directory containing 1991-2020 monthly climatologies")
-args = parser.parse_args()
 
-try:
-    fcstdate = datetime.strptime(args.date, "%Y%m")
-except Exception:
-    sys.exit("ERROR: --date must be YYYYMM (e.g., 202603)")
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Build NMME monthly forecast products"
+    )
+    p.add_argument(
+        "--date",
+        required=True,
+        help="Forecast init date YYYYMM (e.g., 202603)",
+    )
+    p.add_argument(
+        "--config",
+        default="confignmme.yaml",
+        help="Path to NMME config YAML",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run without writing plots or NetCDF output",
+    )
+    return p.parse_args()
 
-data_root = Path(args.data_root)
-clim_root = Path(args.clim_path)
-fcst_yyyymm = fcstdate.strftime("%Y%m")
 
-print(f"[INFO] Using local NMME data from: {data_root}")
-print(f"[INFO] Climatology path: {clim_root}")
-print(f"[INFO] Forecast init (target): {fcstdate:%Y-%m}")
+def main() -> int:
+    args = parse_args()
 
-# Build per-model anomalies & MME
-(ds_models, vnames, levs, units) = init_models()
+    # ---- Validate date ----
+    try:
+        fcstdate = datetime.strptime(args.date, "%Y%m")
+    except ValueError:
+        print("[ERROR] --date must be YYYYMM (e.g., 202603)", file=sys.stderr)
+        return 2
 
-ds_fcst = build_mme_for_month(data_root, clim_root, pd.Timestamp(fcstdate))
+    cfg = load_config(args.config)
 
-# Output locations
-figpath = f"/data/esplab/shared/model/initialized/nmme/forecast/monthly/{fcst_yyyymm}/images/"
-os.makedirs(figpath, exist_ok=True)
-print(f"[INFO] Writing plots to: {figpath}")
-nmme_plot(ds_fcst, figpath)
+    data_root = Path(cfg["data"]["local"]["root"])
+    clim_root = Path(
+        cfg["data"]["local"].get(
+            "climatology",
+            "/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020/",
+        )
+    )
 
-print(f"[INFO] Writing data for {fcst_yyyymm}")
-nmme_write(ds_fcst, fcst_yyyymm)
+    out_root = Path(cfg["data"]["output"]["nmme_monthly"])
+    fcst_yyyymm = fcstdate.strftime("%Y%m")
+    figpath = out_root / fcst_yyyymm / "images"
+
+    print(f"[INFO] Forecast init: {fcstdate:%Y-%m}")
+    print(f"[INFO] Data root: {data_root}")
+    print(f"[INFO] Climatology root: {clim_root}")
+    print(f"[INFO] Output base: {out_root}")
+    print(f"[INFO] Dry-run mode: {args.dry_run}")
+
+    if not args.dry_run:
+        ensure_dir(figpath)
+
+    init_models()
+
+    ds_fcst = build_mme_for_month(
+        data_root=data_root,
+        clim_root=clim_root,
+        target=pd.Timestamp(fcstdate),
+    )
+
+    if args.dry_run:
+        print("[DRY-RUN] Products computed successfully")
+        print("[DRY-RUN] Dataset summary:")
+        print(ds_fcst)
+    else:
+        nmme_plot(ds_fcst, figpath)
+        nmme_write(ds_fcst, fcst_yyyymm)
+        print(f"[INFO] Products written for {fcst_yyyymm}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
