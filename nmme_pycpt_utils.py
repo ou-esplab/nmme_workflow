@@ -1,28 +1,24 @@
 """
 nmme_pycpt_utils.py
 
-Shared utility functions for the NMME + PyCPT workflow.
+Local-only utilities for the NMME + PyCPT workflow.
 
-This module contains:
+This module provides:
   • YAML configuration helpers
   • Region and model resolution
-  • Local data loading utilities
-  • Anomaly computation helpers
-  • Plotting and regridding helpers used by PyCPT workflows
-
-Design goals:
-  • No side effects
-  • No CLI parsing
-  • No hard-coded paths
-  • Fully driven by configuration objects
+  • Local data loading for predictand, hindcasts, and forecasts
+  • Simple anomaly helpers
+  • Safe grid interpolation
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-import yaml
-import numpy as np
+from typing import List, Tuple
+
 import xarray as xr
+import numpy as np
+import yaml
 
 
 # ============================================================
@@ -30,67 +26,18 @@ import xarray as xr
 # ============================================================
 
 def load_config(path: Path) -> dict:
-    """
-    Load a YAML configuration file.
-
-    Parameters
-    ----------
-    path : Path
-        Path to configuration YAML.
-
-    Returns
-    -------
-    dict
-        Parsed configuration dictionary.
-    """
     with path.open("r") as f:
         return yaml.safe_load(f)
 
 
-def get_region(regions: list[dict], name: str) -> dict:
-    """
-    Retrieve a single region definition by name.
-
-    Raises if region not found.
-
-    Parameters
-    ----------
-    regions : list of dict
-        List of region definitions.
-    name : str
-        Region name.
-
-    Returns
-    -------
-    dict
-        Region definition.
-    """
+def get_region(regions: List[dict], name: str) -> dict:
     for r in regions:
         if r.get("name") == name:
             return r
     raise ValueError(f"Region '{name}' not found in configuration.")
 
 
-def resolve_models(global_models: list[str], region: dict) -> list[str]:
-    """
-    Resolve models for a region.
-
-    Priority:
-      1) region['models'] override (if present)
-      2) top-level models
-
-    Parameters
-    ----------
-    global_models : list[str]
-        Top-level model list.
-    region : dict
-        Region definition.
-
-    Returns
-    -------
-    list[str]
-        Effective model list.
-    """
+def resolve_models(global_models: List[str], region: dict) -> List[str]:
     if "models" in region and region["models"]:
         return list(region["models"])
     return list(global_models)
@@ -100,155 +47,456 @@ def resolve_models(global_models: list[str], region: dict) -> list[str]:
 # LOCAL DATA LOADING
 # ============================================================
 
+from datetime import datetime
+import numpy as np
+
+def select_lead(fdate, season, L_coord):
+    """
+    Select a single representative forecast lead L based on forecast
+    initialization date and target season, following PyCPT logic.
+
+    Parameters
+    ----------
+    fdate : str or datetime
+        Forecast initialization date (e.g., '2026-01-01').
+    season : str
+        Target season in 'Mon-Mon' format (e.g., 'Feb-Apr').
+    L_coord : array-like
+        Available lead values from predictor dataset (e.g., da['L'].values).
+
+    Returns
+    -------
+    float
+        Selected lead value from L_coord.
+    """
+
+    # -----------------------------
+    # 1. Parse forecast init month
+    # -----------------------------
+    if isinstance(fdate, str):
+        init_month = datetime.fromisoformat(fdate).month
+    elif isinstance(fdate, datetime):
+        init_month = fdate.month
+    else:
+        raise TypeError("fdate must be str or datetime")
+
+    # -----------------------------
+    # 2. Parse target season months
+    # -----------------------------
+    month_map = {
+        "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4,
+        "May": 5, "Jun": 6, "Jul": 7, "Aug": 8,
+        "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    }
+
+    try:
+        start_mon, end_mon = season.split("-")
+        start_m = month_map[start_mon]
+        end_m = month_map[end_mon]
+    except Exception:
+        raise ValueError("season must be like 'Feb-Apr'")
+
+    # -----------------------------
+    # 3. Build season month list
+    #    (handles year crossing)
+    # -----------------------------
+    if end_m >= start_m:
+        season_months = list(range(start_m, end_m + 1))
+    else:
+        # e.g., Nov-Feb
+        season_months = list(range(start_m, 13)) + list(range(1, end_m + 1))
+
+    # -----------------------------
+    # 4. Convert season months to leads
+    # -----------------------------
+    # Lead is relative to initialization month
+    leads = []
+    for m in season_months:
+        lead = m - init_month
+        if lead <= 0:
+            lead += 12
+        leads.append(lead)
+
+    # -----------------------------
+    # 5. Choose central season month
+    # -----------------------------
+    center_lead = np.median(leads)
+
+    # -----------------------------
+    # 6. Match to available L values
+    # -----------------------------
+    L_coord = np.asarray(L_coord)
+
+    # Prefer exact match, else nearest
+    if center_lead in L_coord:
+        return float(center_lead)
+
+    idx = np.argmin(np.abs(L_coord - center_lead))
+    return float(L_coord[idx])
+
 def _rename_to_cpt_dims(da: xr.DataArray | xr.Dataset) -> xr.DataArray:
-    """
-    Normalize coordinate names to PyCPT conventions: X, Y, T.
-    """
     if isinstance(da, xr.Dataset):
         da = da[list(da.data_vars)[0]]
 
     rename = {}
     for lat in ("lat", "latitude", "y", "Y"):
-        if lat in da.coords:
+        if lat in da.coords or lat in da.dims:
             rename[lat] = "Y"
             break
-
     for lon in ("lon", "longitude", "x", "X"):
-        if lon in da.coords:
+        if lon in da.coords or lon in da.dims:
             rename[lon] = "X"
             break
-
     for tim in ("time", "T", "year"):
-        if tim in da.coords:
+        if tim in da.coords or tim in da.dims:
             rename[tim] = "T"
             break
 
     if rename:
         da = da.rename(rename)
 
+    for c in ("Y", "X", "T"):
+        if c in da.coords:
+            da = da.sortby(c)
+
     return da
 
 
 def open_netcdf_variable(path_glob: Path, var: str) -> xr.DataArray:
     """
-    Open one or more NetCDF files and return a DataArray.
+    Open one or more NetCDF files, decode CF time correctly (T or S),
+    and return a DataArray with normalized spatial dimensions.
 
-    Parameters
-    ----------
-    path_glob : Path
-        File path or glob pattern.
-    var : str
-        Variable name inside NetCDF.
-
-    Returns
-    -------
-    xr.DataArray
+    Time handling rules:
+      - Open with decode_times=False for safety
+      - Decode CF time explicitly using decode_cf_time
+      - Decode 'T' if present, else decode 'S' if present
+      - Leave calendars intact (no forced changes)
     """
     files = sorted(path_glob.parent.glob(path_glob.name))
     if not files:
-        raise FileNotFoundError(f"No NetCDF files found for {path_glob}")
+        raise FileNotFoundError(f"No NetCDF files found matching: {path_glob}")
 
-    ds = xr.open_mfdataset(files, combine="by_coords") if len(files) > 1 else xr.open_dataset(files[0])
+    # Always open safely first
+    ds = (
+        xr.open_mfdataset(files, combine="by_coords", decode_times=False)
+        if len(files) > 1
+        else xr.open_dataset(files[0], decode_times=False)
+    )
 
-    if var not in ds:
-        raise KeyError(f"Variable '{var}' not found. Available: {list(ds.data_vars)}")
+    # Decode CF time *explicitly* and *only* for valid time coords
+    if "T" in ds.coords:
+        ds = decode_cf_time(ds, time_var="T")
+    elif "S" in ds.coords:
+        ds = decode_cf_time(ds, time_var="S")
 
+    if var not in ds.data_vars:
+        raise KeyError(
+            f"Variable '{var}' not found in {files[0]} "
+            f"(vars={list(ds.data_vars)})"
+        )
+
+    # Return DataArray with standardized spatial dims (no time guessing)
     return _rename_to_cpt_dims(ds[var])
+
 
 
 def load_predictand_local(root: Path, subdir: str, var: str) -> xr.DataArray:
     """
-    Load local predictand (observations).
+    Load local predictand (observations) with calendar-aware time decoding.
 
-    Parameters
-    ----------
-    root : Path
-        Base local data root.
-    subdir : str
-        Subdirectory under root/observations.
-    var : str
-        Variable name.
-
-    Returns
-    -------
-    xr.DataArray
+    This MUST use decode_times=True so that `.dt.month` and `.dt.year`
+    are available for seasonal aggregation.
     """
-    return open_netcdf_variable(root / "observations" / subdir / "*.nc", var)
+    files = sorted((root / "observations" / subdir).glob("*.nc"))
+    if not files:
+        raise FileNotFoundError(f"No predictand files found in {root / 'observations' / subdir}")
+
+    ds = xr.open_mfdataset(
+        files,
+        combine="by_coords",
+        decode_times=True,     # ✅ THIS IS THE FIX
+        use_cftime=True        # ✅ ensures non‑standard calendars work
+    )
+
+    if var not in ds:
+        raise KeyError(f"Predictand variable '{var}' not found (vars={list(ds.data_vars)})")
+
+    da = ds[var]
+
+    # Standardize dimension names (lat/lon/time → Y/X/T)
+    da = _rename_to_cpt_dims(da)
+
+    return da
 
 
-def load_model_local(
+def _yyyymm_parts(yyyymm: str) -> tuple[str, str]:
+    if len(yyyymm) != 6 or not yyyymm.isdigit():
+        raise ValueError(f"Expected YYYYMM, got: {yyyymm}")
+    return yyyymm[:4], yyyymm[4:]
+
+
+def _format_pattern(pattern: str, *, root: Path, model: str, var: str, yyyy: str | None, mm: str | None) -> Path:
+    filled = pattern.format(
+        root=str(root),
+        model=model,
+        var=var,
+        yyyy=yyyy or "",
+        mm=mm or "",
+    )
+    return Path(filled)
+
+
+def load_model_local_with_patterns(
     root: Path,
     model_base: str,
     init_yyyymm: str,
-    var: str
-) -> tuple[xr.DataArray, xr.DataArray]:
-    """
-    Load local hindcasts and forecast for a single model.
+    var: str,
+    patterns: dict[str, str],
+) -> Tuple[xr.DataArray, xr.DataArray]:
+    yyyy, mm = _yyyymm_parts(init_yyyymm)
 
-    Layout:
-      hindcasts/<model_base>/<var>/*.nc
-      forecasts/<model_base>/<var>/<YYYYMM>*.nc
-    """
-    hc = open_netcdf_variable(root / "hindcasts" / model_base / var / "*.nc", var)
-    fc = open_netcdf_variable(root / "forecasts" / model_base / var / f"{init_yyyymm}*.nc", var)
+    hind_glob = _format_pattern(
+        patterns["hindcast"], root=root, model=model_base, var=var, yyyy=None, mm=None
+    )
+    fore_glob = _format_pattern(
+        patterns["forecast"], root=root, model=model_base, var=var, yyyy=yyyy, mm=mm
+    )
+
+    hc = open_netcdf_variable(hind_glob, var)
+    fc = open_netcdf_variable(fore_glob, var)
     return hc, fc
 
+def decode_cf_time(ds: xr.Dataset, time_var: str) -> xr.Dataset:
+    """
+    Decode a CF-compliant time coordinate safely, including non-standard
+    calendars (e.g. '360_day').
+
+    This function:
+      - Decodes only the requested time variable
+      - Normalizes known calendar aliases ('360' -> '360_day')
+      - Uses cftime-aware decoding
+      - Preserves the original calendar semantics
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Dataset containing a time coordinate.
+    time_var : str
+        Name of the time coordinate to decode (e.g. 'T' or 'S').
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with decoded time coordinate (if applicable).
+    """
+    if time_var not in ds.coords:
+        return ds
+
+    # Work on a copy to avoid side effects
+    ds = ds.copy()
+
+    cal = ds[time_var].attrs.get("calendar")
+
+    # Normalize non-CF calendar aliases
+    if cal == "360":
+        ds[time_var].attrs["calendar"] = "360_day"
+
+    # Decode using CF conventions + cftime
+    ds = xr.decode_cf(ds, decode_times=True, use_cftime=True)
+
+    # Sanity check
+    if not hasattr(ds[time_var], "dt"):
+        raise ValueError(
+            f"Failed to decode time coordinate '{time_var}' "
+            f"to a datetime-like object."
+        )
+
+    return ds
 
 # ============================================================
-# ANOMALY COMPUTATION
+# ANOMALIES
 # ============================================================
+
+import numpy as np
+import xarray as xr
+
+def to_cptv10(X=None, Y=None):
+    """
+    Convert CPT-ready DataArrays into CPTv10-named DataArrays.
+
+    Input expectations:
+      X : (S, C, Y, X)  → predictor
+      Y : (S, Y, X)     → predictand
+
+    Returns:
+      X_v10 : (T, C, row, col)
+      Y_v10 : (T, row, col)
+    """
+
+    X_v10 = None
+    Y_v10 = None
+
+    if X is not None:
+        if X.dims != ("S", "C", "Y", "X"):
+            raise ValueError(f"X is not CPT-ready: dims={X.dims}")
+
+        X_v10 = (
+            X
+            .rename({
+                "S": "T",
+                "Y": "row",
+                "X": "col",
+            })
+            .transpose("T", "C", "row", "col")
+        )
+
+    if Y is not None:
+        if Y.dims != ("S", "Y", "X"):
+            raise ValueError(f"Y is not CPT-ready: dims={Y.dims}")
+
+        Y_v10 = (
+            Y
+            .rename({
+                "S": "T",
+                "Y": "row",
+                "X": "col",
+            })
+            .transpose("T", "row", "col")
+        )
+
+    return X_v10, Y_v10
+
+def prepare_predictand_for_cpt(
+    Y,
+    season,
+    hindcast_years,
+):
+    """
+    Prepare predictand for CPT-Core CCA.
+
+    This function:
+      - Assumes Y has dims (T, Y, X) with T as datetime-like
+      - Aggregates to seasonal mean for the target season
+      - Computes anomalies relative to the hindcast-period climatology
+      - Aligns samples to hindcast years
+      - Returns CPT-ready predictand with dims (S, Y, X)
+
+    Parameters
+    ----------
+    Y : xarray.DataArray
+        Predictand data with dimensions (T, Y, X).
+        T must be datetime-like (datetime64 or cftime).
+    season : str
+        Target season in 'Mon-Mon' format, e.g. 'Feb-Apr'.
+    hindcast_years : array-like
+        Calendar years corresponding to hindcast samples
+        (typically X['S'].dt.year.values).
+
+    Returns
+    -------
+    xarray.DataArray
+        Seasonal-mean predictand anomalies with dims (S, Y, X),
+        ready for CPT-Core.
+    """
+
+    # ---------------------------------------------------------
+    # 0. Basic checks
+    # ---------------------------------------------------------
+    if "T" not in Y.dims:
+        raise ValueError("Predictand must have dimension 'T' (time).")
+
+    if not hasattr(Y["T"], "dt"):
+        raise ValueError("Predictand time coordinate must be datetime-like.")
+
+    hindcast_years = np.asarray(hindcast_years).astype(int)
+
+    # ---------------------------------------------------------
+    # 1. Parse season into months
+    # ---------------------------------------------------------
+    month_map = {
+        "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4,
+        "May": 5, "Jun": 6, "Jul": 7, "Aug": 8,
+        "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    }
+
+    try:
+        start_mon, end_mon = season.split("-")
+        start_m = month_map[start_mon]
+        end_m = month_map[end_mon]
+    except Exception:
+        raise ValueError("season must be in 'Mon-Mon' format, e.g. 'Feb-Apr'")
+
+    # Handle seasons that cross year boundary (e.g., Nov-Feb)
+    if end_m >= start_m:
+        season_months = list(range(start_m, end_m + 1))
+    else:
+        season_months = list(range(start_m, 13)) + list(range(1, end_m + 1))
+
+    # ---------------------------------------------------------
+    # 2. Select season months
+    # ---------------------------------------------------------
+    Y_season = Y.where(
+        Y["T"].dt.month.isin(season_months),
+        drop=True,
+    )
+
+    if Y_season.sizes.get("T", 0) == 0:
+        raise ValueError(f"No data found for season {season}")
+
+    # ---------------------------------------------------------
+    # 3. Compute seasonal mean per year
+    # ---------------------------------------------------------
+    # Group by calendar year AFTER selecting season months
+    Y_seasonal = Y_season.groupby("T.year").mean("T")
+
+    # ---------------------------------------------------------
+    # 4. Align to hindcast years (intersection)
+    # ---------------------------------------------------------
+    available_years = Y_seasonal["year"].values.astype(int)
+    common_years = np.intersect1d(available_years, hindcast_years)
+
+    if common_years.size == 0:
+        raise ValueError(
+            f"No overlapping years between predictand ({available_years.min()}–{available_years.max()}) "
+            f"and hindcasts ({hindcast_years.min()}–{hindcast_years.max()})"
+        )
+
+    Y_aligned = Y_seasonal.sel(year=common_years)
+
+    # ---------------------------------------------------------
+    # 5. Compute climatology over hindcast period
+    # ---------------------------------------------------------
+    clim = Y_aligned.mean("year")
+
+    # ---------------------------------------------------------
+    # 6. Convert to anomalies
+    # ---------------------------------------------------------
+    Y_anom = Y_aligned - clim
+
+    # ---------------------------------------------------------
+    # 7. Rename to CPT sample dimension and order dims
+    # ---------------------------------------------------------
+    Y_cpt = (
+        Y_anom
+        .rename({"year": "S"})
+        .transpose("S", "Y", "X")
+    )
+
+    # ---------------------------------------------------------
+    # 8. Final sanity checks
+    # ---------------------------------------------------------
+    if Y_cpt.dims != ("S", "Y", "X"):
+        raise RuntimeError(f"Predictand has unexpected dims: {Y_cpt.dims}")
+
+    return Y_cpt
 
 def hindcast_climatology(hc: xr.DataArray) -> xr.DataArray:
-    """
-    Compute hindcast climatology along T dimension.
-    """
     return hc.mean("T")
 
 
 def forecast_minus_hindcast_climo(fc: xr.DataArray, hc: xr.DataArray) -> xr.DataArray:
-    """
-    Compute forecast anomalies relative to hindcast climatology.
-    """
     return fc - hindcast_climatology(hc)
-
-
-# ============================================================
-# TERCILE / PROBABILITY HELPERS
-# ============================================================
-
-def standardized_mos_prob(mos_prob: xr.DataArray) -> xr.DataArray:
-    """
-    Standardize MOS probabilities to categories [bn, nn, an] in percent.
-    """
-    if "T" in mos_prob.dims:
-        mos_prob = mos_prob.isel(T=0)
-
-    mos_prob = mos_prob.rename({"C": "cat"})
-    mos_prob = mos_prob.assign_coords(cat=["bn", "nn", "an"])
-
-    if mos_prob.max() <= 1.01:
-        mos_prob = mos_prob * 100.0
-
-    return mos_prob
-
-
-def tercile_thresholds(hc_anom: xr.DataArray) -> tuple[xr.DataArray, xr.DataArray]:
-    """
-    Compute 33rd and 66th percentile tercile thresholds.
-    """
-    t33 = hc_anom.quantile(0.33, dim="T")
-    t66 = hc_anom.quantile(0.66, dim="T")
-    return t33.squeeze(), t66.squeeze()
-
-
-def raw_tercile_masks(fc_anom: xr.DataArray, t33, t66) -> xr.DataArray:
-    """
-    One-hot tercile mask in percent.
-    """
-    bn = (fc_anom < t33) * 100.0
-    an = (fc_anom >= t66) * 100.0
-    nn = 100.0 - bn - an
-    return xr.concat([bn, nn, an], dim="cat").assign_coords(cat=["bn", "nn", "an"])
 
 
 # ============================================================
@@ -256,9 +504,6 @@ def raw_tercile_masks(fc_anom: xr.DataArray, t33, t66) -> xr.DataArray:
 # ============================================================
 
 def interp_to_target_grid(src: xr.DataArray, target: xr.DataArray) -> xr.DataArray:
-    """
-    Interpolate source data to target grid safely.
-    """
     src = _rename_to_cpt_dims(src)
     target = _rename_to_cpt_dims(target)
     return src.interp(X=target.X, Y=target.Y)

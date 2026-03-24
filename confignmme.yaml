@@ -21,6 +21,8 @@ pycpt_regions:
     lat: [20, 33]
     lon: [-118, -97]
     season: Feb-Apr
+    models:
+      - NASA-GEOSS2S
 
   - name: Iran
     lat: [24, 40]
@@ -37,32 +39,33 @@ pycpt_regions:
 # Data Sources
 # ------------------------------------------------------------
 data:
-
-  # Switch between local data and download-based workflows
   local:
     enabled: true
-
-    # Base directory for all locally stored NMME/PyCPT inputs
     root: /data/esplab/nmme-backup
 
-    # Observations / predictand
     predictand:
-      dir: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p05
+      dir: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p25
       var: precip
 
-    # Variable names used in model files
+    # The variable name used in your model NetCDF directory & file prefix
     model_vars:
-      precipitation: pr
+      precipitation: prec
 
-    # Mapping from YAML model IDs → local directory names
-    # Required only when local directory names differ from model IDs
+    # Only needed if some models use a different folder name than the YAML ID
+    # If your folders match the IDs, you can delete this entire block.
     model_base:
-      NASA-GEOSS2S: GEOSS2S
+      NASA-GEOSS2S: NASA-GEOSS2S
       CanESM5: CanESM5
       GEM5.2-NEMO: GEM5.2-NEMO
-      NCEP-CFSv2: CFSv2
-      COLA-RSMAS-CCSM4: CCSM4
+      NCEP-CFSv2: NCEP-CFSv2
+      COLA-RSMAS-CCSM4: COLA-RSMAS-CCSM4
 
+    path_patterns:
+      # Hindcasts live across many years -> use wildcards for yyyy/mm
+      hindcast: "{root}/{model}/hindcast/{var}/{var}_{model}_????_??.nc"
+
+      # Forecast lives for one init -> keep date-specific pattern
+      forecast: "{root}/{model}/forecast/{var}/{var}_{model}_{yyyy}_{mm}.nc"
 
   # Output locations
   output:
