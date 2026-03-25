@@ -1,36 +1,71 @@
+# utils/nmme_normalize.py
+
+from typing import Optional
 import numpy as np
 import pandas as pd
 import xarray as xr
 
+
 def decode_cf_safe(ds: xr.Dataset) -> xr.Dataset:
+    """Decode CF times without throwing."""
     try:
         return xr.decode_cf(ds)
     except Exception:
         return ds
 
-def ensure_start_coord(ds: xr.Dataset, start: pd.Timestamp) -> xr.Dataset:
-    ds = ds.assign_coords(S=np.array(start.to_datetime64()))
-    return ds
 
-def standardize_dims(ds: xr.Dataset) -> xr.Dataset:
-    rename = {}
-    if "X" in ds.dims: rename["X"] = "lon"
-    if "Y" in ds.dims: rename["Y"] = "lat"
-    if "L" in ds.dims: rename["L"] = "lead"
-    ds = ds.rename(rename)
-    return ds
+def extract_S_scalar(ds, fallback=None):
+    """
+    Extract a single scalar S value from the dataset.
 
-def fix_lead_coord(ds: xr.Dataset) -> xr.Dataset:
-    if "lead" in ds.coords:
-        try:
-            ds["lead"] = ds["lead"].astype(int)
-        except Exception:
-            pass
-    return ds
+    Returns:
+      - cftime datetime if decoded with use_cftime=True
+      - numpy.datetime64 if that is what the dataset uses
+    """
+    if "S" not in ds:
+        if fallback is None:
+            raise ValueError("Dataset has no S and no fallback provided")
+        return fallback
 
-def add_valid_times(ds: xr.Dataset) -> xr.Dataset:
-    if "S" not in ds.coords or "lead" not in ds.coords:
-        return ds
-    start = pd.to_datetime(ds["S"].values)
-    valid = [start + pd.DateOffset(months=int(l)) for l in ds["lead"].values]
-    return ds.assign_coords(valid=("lead", valid))
+    S_vals = ds["S"].values
+
+    # scalar or length-1 array
+    if S_vals.ndim == 0:
+        return S_vals.item()
+    if S_vals.size == 1:
+        return S_vals.reshape(-1)[0]
+
+    raise ValueError(f"S has unexpected shape {S_vals.shape}")
+    
+    
+
+def add_valid_times(ds, S_ts):
+    """
+    Add valid time coordinate using pandas datetime arithmetic.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Dataset with integer lead coordinate 'L'
+    S_ts : pandas.Timestamp
+        Forecast initialization date in Gregorian calendar
+
+    Notes
+    -----
+    This function MUST NOT be called with cftime objects.
+    """
+    if not isinstance(S_ts, pd.Timestamp):
+        raise TypeError(
+            "add_valid_times requires pandas.Timestamp; "
+            "convert cftime → pandas explicitly before calling."
+        )
+
+    valid = np.array(
+        [
+            S_ts + pd.DateOffset(months=int(l))
+            for l in ds["L"].values
+        ],
+        dtype="datetime64[ns]",
+    )
+
+    return ds.assign_coords(valid=("L", valid))

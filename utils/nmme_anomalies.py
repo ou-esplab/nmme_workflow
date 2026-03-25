@@ -1,6 +1,8 @@
-from pathlib import Path
+# utils/nmme_anomalies.py
+
 import pandas as pd
 import xarray as xr
+from pathlib import Path
 
 from utils.nmme_io import (
     open_local_forecast,
@@ -8,10 +10,8 @@ from utils.nmme_io import (
 )
 from utils.nmme_normalize import (
     decode_cf_safe,
-    ensure_start_coord,
-    standardize_dims,
-    fix_lead_coord,
-    add_valid_times,
+    extract_S_scalar,
+#    add_valid_times,
 )
 
 
@@ -24,34 +24,111 @@ def model_anomalies_for_month(
     target: pd.Timestamp,
 ) -> xr.Dataset | None:
     """
-    Load local NMME forecast data for one model/variable/init month,
-    subtract the 1991–2020 monthly climatology, and return anomalies.
+    Compute anomalies for ONE (model, variable, init month).
+
+    Anomalies are computed PER ENSEMBLE MEMBER (M).
     """
 
-    # --- Open forecast ---
+    # ---------------------------
+    # Open forecast
+    # ---------------------------
     raw = open_local_forecast(data_root, model, varname, target)
+
     if raw is None:
+        print(
+            f"[MISSING-FILE] model={model} "
+            f"init={target:%Y%m} var={varname}"
+        )
         return None
 
-    # --- Normalize ---
     raw = decode_cf_safe(raw)
-    raw = ensure_start_coord(raw, target)
-    raw = standardize_dims(raw)
-    raw = fix_lead_coord(raw)
 
-    # --- Open climatology ---
+    # ---------------------------
+    # Extract scalar start time
+    # ---------------------------
+    S_scalar = extract_S_scalar(raw, fallback=target)
+
+    # ---------------------------
+    # Variable existence check
+    # ---------------------------
+    if varname not in raw.data_vars:
+        print(
+            f"[MISSING-VAR] model={model} "
+            f"init={target:%Y%m} var={varname} "
+            f"available={list(raw.data_vars)}"
+        )
+        return None
+
+    # ---------------------------
+    # Open climatology
+    # ---------------------------
     clim = open_monthly_climatology(
         clim_root, model, varname, levstr, raw, target
     )
-    if clim is None:
+
+    if clim is None or varname not in clim.data_vars:
+        print(
+            f"[MISSING-CLIM] model={model} "
+            f"init={target:%Y%m} var={varname}"
+        )
         return None
 
-    # --- Subtract climatology ---
-    da_anom = raw[varname] - clim[varname]
-    ds_out = da_anom.to_dataset(name=varname)
+    # ---------------------------
+    # Prepare forecast array
+    # (S removed for arithmetic)
+    # ---------------------------
+    fcst_da = raw[varname]
 
-    # --- Final coords ---
-    ds_out = ensure_start_coord(ds_out, target)
-    ds_out = add_valid_times(ds_out)
+    if "S" in fcst_da.dims:
+        fcst_da = fcst_da.isel(S=0).drop_vars("S", errors="ignore")
 
-    return ds_out
+    # Enforce forecast dims
+    expected_fcst_dims = {"M", "L", "Y", "X"}
+    if set(fcst_da.dims) != expected_fcst_dims:
+        print(
+            f"[INVALID-DIMS] model={model} "
+            f"init={target:%Y%m} var={varname} "
+            f"dims={fcst_da.dims} "
+            f"expected={expected_fcst_dims} "
+            f"(skipping)"
+        )
+        return None
+    # ---------------------------
+    # Prepare climatology array
+    # ---------------------------
+    clim_da = clim[varname]
+    
+    # --- Rename climatology dims to match forecast convention ---
+    clim_da = clim_da.rename({
+        "lon": "X",
+        "lat": "Y",
+        "lead": "L",
+    })
+
+    for d in list(clim_da.dims):
+        if d not in ("L", "Y", "X"):
+            clim_da = clim_da.isel({d: 0}).squeeze(drop=True)
+
+    expected_clim_dims = {"L", "Y", "X"}
+    if set(clim_da.dims) != expected_clim_dims:
+        raise ValueError(
+            f"Unexpected climatology dims {clim_da.dims}, "
+            f"expected {expected_clim_dims}"
+        )
+
+    # ---------------------------
+    # Compute anomalies
+    # ---------------------------
+    da_anom = fcst_da - clim_da
+
+    # ---------------------------
+    # Restore S as metadata
+    # ---------------------------
+    da_anom = da_anom.expand_dims(S=[S_scalar])
+
+    # ---------------------------
+    # Add valid time
+    # ---------------------------
+    #da_anom = add_valid_times(da_anom, S_scalar)
+
+    return da_anom.to_dataset(name=varname)
