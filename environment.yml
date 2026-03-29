@@ -1,36 +1,37 @@
 name: nmme_workflow
+
 channels:
-  - iri-nextgen
   - conda-forge
-  - defaults
+  - iri-nextgen
+
 dependencies:
+  # Language
   - python=3.10
-  - pip
-  - numpy
-  - pandas
-  - xarray
-  - dask
+
+  # Core scientific stack (PINNED)
+  - numpy>=1.23,<2.0
+  - pandas>=1.5,<2.2
+  - xarray>=2023.6,<2025.0
   - cftime
   - netcdf4
   - scipy
+  - dask
+
+  # Geospatial / plotting (PINNED)
   - matplotlib
-  - cartopy
+  - cartopy>=0.21,<0.24
+  - shapely
+  - pyproj>=3.4,<3.7
+
+  # Utilities
   - pyyaml
-  - fsspec
-  - rasterio
-  - geopandas
-  - jacobian
-  - jinja2
-  - cptbin
-  - cptcore
+
+  # CPT tools: avoid strict pin to avoid missing builds in available channels
   - cptio
+  - cptcore
   - cptdl
   - cptextras
-  - ipykernel
-  - ipython
-  - pytest
-  - pytest-xdist
-  - cffi
+  - pip
   - pip:
       - xarray-spatial
       - zarr

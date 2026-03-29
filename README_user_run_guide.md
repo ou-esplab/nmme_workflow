@@ -34,18 +34,34 @@ Before running this workflow, ensure:
    - pycpt / cptcore / cptio
    - xarray, numpy, pandas
 
+Project utilities are organized under `utils/`:
+   - `utils/nmme_pycpt_utils.py`
+   - `utils/nmme_products_utils.py`
+   - `utils/pycpt_utils.py`
+
+Legacy compatibility module remains at the repo root:
+   - `nmme_pycpt_utils.py` (imports from `utils/nmme_pycpt_utils.py`)
+
 Create using conda:
 
 ```bash
-conda env create -f environment.yml -n nmme_workflow
-conda activate nmme_workflow
+conda config --set channel_priority strict
+conda env create -f environment.yml -n nmme_workflow_env
+conda activate nmme_workflow_env
 ```
 
-If cpt packages are missing, add channel and install:
+If environment creation fails with missing CPT packages, install explicitly from the IRI channel:
 
 ```bash
 conda config --add channels iri-nextgen
-conda install -n nmme_workflow cptbin cptcore cptio cptdl cptextras
+conda install -n nmme_workflow_env cptbin cptcore cptio cptdl cptextras
+```
+
+If conda solver is slow or hangs, use the libmamba solver:
+
+```bash
+conda install -n base -c conda-forge conda-libmamba-solver -y
+conda env create -f environment.yml -n nmme_workflow_env --solver=libmamba
 ```
 
 ---
