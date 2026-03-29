@@ -39,9 +39,6 @@ Project utilities are organized under `utils/`:
    - `utils/nmme_products_utils.py`
    - `utils/pycpt_utils.py`
 
-Legacy compatibility module remains at the repo root:
-   - `nmme_pycpt_utils.py` (imports from `utils/nmme_pycpt_utils.py`)
-
 Recommended install (reproducible from known-good environment):
 
 ```bash
@@ -49,11 +46,11 @@ conda create -n nmme_workflow_env --file environment.from-pycpt-2.8.2.lock.txt
 conda activate nmme_workflow_env
 ```
 
-Alternative install from environment.yml:
+Alternative install from environment.yml (may solve slowly):
 
 ```bash
 conda config --set channel_priority strict
-conda env create -f environment.yml -n nmme_workflow_env
+conda env create -f environment.yml -n nmme_workflow_env --solver=libmamba
 conda activate nmme_workflow_env
 ```
 
@@ -76,6 +73,13 @@ If conda solver is slow or hangs, use the libmamba solver:
 ```bash
 conda install -n base -c conda-forge conda-libmamba-solver -y
 conda env create -f environment.yml -n nmme_workflow_env --solver=libmamba
+```
+
+After activation, verify CPT tooling is available:
+
+```bash
+which CPT.x
+python -c "import cptcore, cptio; print('ok')"
 ```
 
 ---

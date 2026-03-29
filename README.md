@@ -14,6 +14,12 @@ conda env create -f environment.yml -n nmme_workflow_env --solver=libmamba
 conda activate nmme_workflow_env
 ```
 
+Verify CPT dependencies in the active environment:
+```bash
+which CPT.x
+python -c "import cptcore, cptio; print('ok')"
+```
+
 ## Run (using unified runner)
 ```bash
 python3 runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM
@@ -21,6 +27,6 @@ python3 runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM
 
 - Stages: `ingest`, `products`, `pycpt` (default runs all).
 - Place your real `confignmme.yaml` here if the placeholder was created.
-- Shell entry (optional): `./nmme_pipeline.sh` uses nmme_fcst_utils + locks.
+- Legacy shell entry (optional): `./nmme_pipeline.sh` delegates to the runner.
 
 Outputs and logs are written under `logs/YYYYMMDD_HHMMSS/nmme/<init>/`.

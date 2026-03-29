@@ -15,6 +15,14 @@ Forecast Products (ensemble‑mean anomalies)
 PyCPT Post‑Processing
 ```
 
+Primary entrypoint:
+
+- `python runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM`
+
+Legacy shell wrapper:
+
+- `./nmme_pipeline.sh` (delegates to runner)
+
 ---
 
 ## Design Principles
@@ -68,6 +76,12 @@ All runtime behavior is controlled by `confignmme.yaml`:
 - I/O locations
 
 No hard‑coded assumptions.
+
+## Code Organization
+
+- Shared workflow helpers are under `utils/`.
+- PyCPT helpers live in `utils/nmme_pycpt_utils.py`.
+- Product build, plotting, and write modules are composed via `utils/nmme_products_utils.py`.
 
 ---
 
