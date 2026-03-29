@@ -34,18 +34,42 @@ Before running this workflow, ensure:
    - pycpt / cptcore / cptio
    - xarray, numpy, pandas
 
+Create using conda:
+
+```bash
+conda env create -f environment.yml -n nmme_workflow
+conda activate nmme_workflow
+```
+
+If cpt packages are missing, add channel and install:
+
+```bash
+conda config --add channels iri-nextgen
+conda install -n nmme_workflow cptbin cptcore cptio cptdl cptextras
+```
+
 ---
 
 ## Basic Command
 
+Preferred new command (runner):
+
 ```bash
-./pycpt_seasonal_rt.py confignmme.yaml YYYYMM --only REGION
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601
+```
+
+This runs the full end-to-end pipeline: ingest, products, pycpt.
+
+Legacy wrapper (still available):
+
+```bash
+./nmme_pipeline.sh
 ```
 
 ### Example
 
 ```bash
-./pycpt_seasonal_rt.py confignmme.yaml 202601 --only Mexico
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 ```
 
 ### Dry-Run Mode (NEW)

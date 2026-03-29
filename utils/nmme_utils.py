@@ -53,14 +53,23 @@ def remove_lock(lockfile: str) -> None:
         os.remove(lockfile)
 
 def run_nmme_update(script_path: str, log: str) -> None:
+    """Run NMME update shell script.
+
+    Legacy wrapper used by nmme_pipeline.sh. New orchestrator should use
+    runners/cli.py where possible.
+    """
     run_cmd(f"{script_path}", log)
 
+
 def run_makefcsts(script_path: str, fcstdate: str, log: str) -> None:
+    """Run NMME products stage. Legacy wrapper. """
     run_cmd(f"{script_path} {fcstdate}", log)
+
 
 def run_pycpt(script_path: str, fcstdate: str,
               region: str, season: str,
               lat0: float, lat1: float, lon0: float, lon1: float, log: str) -> None:
+    """Run PyCPT for one region. Legacy wrapper, use run_pycpt_from_yaml.py instead."""
     cmd = (
         f"{script_path} "
         f"--config confignmme.yaml "

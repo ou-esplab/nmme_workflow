@@ -1,5 +1,6 @@
 name: nmme_workflow
 channels:
+  - iri-nextgen
   - conda-forge
   - defaults
 dependencies:
@@ -18,7 +19,7 @@ dependencies:
   - fsspec
   - rasterio
   - geopandas
-  - xskillscore
+  - jacobian
   - jinja2
   - cptbin
   - cptcore
@@ -33,4 +34,3 @@ dependencies:
   - pip:
       - xarray-spatial
       - zarr
-      - leaning
