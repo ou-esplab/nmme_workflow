@@ -27,6 +27,10 @@ python3 runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM
 
 - Stages: `ingest`, `products`, `pycpt` (default runs all).
 - Place your real `confignmme.yaml` here if the placeholder was created.
-- Legacy shell entry (optional): `./nmme_pipeline.sh` delegates to the runner.
+- Legacy shell entry is deprecated: `./nmme_pipeline.sh` now forwards to `runners/cli.py`.
+
+## Regression Checklist
+
+Use [docs/REGRESSION_CHECKLIST.md](docs/REGRESSION_CHECKLIST.md) after refactors and dependency changes.
 
 Outputs and logs are written under `logs/YYYYMMDD_HHMMSS/nmme/<init>/`.

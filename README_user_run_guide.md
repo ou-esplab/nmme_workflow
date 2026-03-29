@@ -94,7 +94,7 @@ python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 
 This runs the full end-to-end pipeline: ingest, products, pycpt.
 
-Legacy wrapper (still available):
+Legacy wrapper (deprecated, still available):
 
 ```bash
 ./nmme_pipeline.sh
@@ -160,3 +160,9 @@ A successful run ends with:
 ```
 
 Any earlier error indicates configuration or data issues.
+
+---
+
+## Regression Checklist
+
+For post-refactor validation steps, run the checklist in [docs/REGRESSION_CHECKLIST.md](docs/REGRESSION_CHECKLIST.md).
