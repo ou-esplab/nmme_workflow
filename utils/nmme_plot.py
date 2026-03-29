@@ -3,7 +3,9 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import cftime
-import proplot as pplt
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
+import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 from utils.nmme_plot_params import initPlotParams
@@ -77,31 +79,55 @@ def _select_model_and_lead(ds, model, ilead):
 
 def _plot_single_panel(
     ax, ds, var, sf, clevs, cmap, norm, title,
-    mproj, lonreg, latreg, statescolor
+    mproj, lonreg, latreg, statescolor, transform
 ):
     """
     Plot a single map panel (UNCHANGED plotting semantics).
     """
-    data = data = ds[f"{var}_ensmean"].values * sf
+    data = ds[f"{var}_ensmean"].values * sf
 
     m = ax.contourf(
         ds["X"], ds["Y"], data,
         levels=clevs,
         cmap=cmap,
         extend="both",
-        norm=norm
+        norm=norm,
+        transform=transform,
     )
 
     if mproj == "robin":
-        ax.format(coast=True, grid=False, borders=True,
-                  borderscolor='gray5', title=title)
+        ax.set_global()
     else:
-        ax.format(coast=True, lonlim=lonreg, latlim=latreg,
-                  grid=False, borders=True,
-                  borderscolor='gray5', title=title)
+        ax.set_extent([lonreg[0], lonreg[1], latreg[0], latreg[1]], crs=transform)
 
-    ax.add_feature(cfeature.STATES, edgecolor=statescolor)
+    ax.coastlines(linewidth=0.8)
+    ax.add_feature(cfeature.BORDERS, edgecolor="0.4", linewidth=0.6)
+    ax.set_title(title, fontsize=9)
+
+    state_edge = "gray" if statescolor == "gray5" else statescolor
+    if mproj != "robin":
+        ax.add_feature(cfeature.STATES, edgecolor=state_edge, linewidth=0.4)
+
     return m
+
+
+def _proj_from_region(reg):
+    mproj = reg["mproj"]
+    clon = reg.get("clon", 0)
+    if mproj == "robin":
+        return ccrs.Robinson(central_longitude=clon)
+    if mproj == "npstere":
+        return ccrs.NorthPolarStereo(central_longitude=clon)
+    return ccrs.PlateCarree(central_longitude=clon)
+
+
+def _cmap_from_name(name):
+    cmap_map = {
+        "ColdHot": "coolwarm",
+        "DryWet": "BrBG",
+        "NegPos": "RdBu_r",
+    }
+    return cmap_map.get(name, name)
 
 
 # ============================================================
@@ -128,7 +154,6 @@ def nmme_plot(ds, path):
     }
 
     os.makedirs(path, exist_ok=True)
-    pplt.rc.savefigdpi = 100
 
     # ----------------------------------
     # Variable loop
@@ -142,7 +167,19 @@ def nmme_plot(ds, path):
             ds_land = xr.open_dataset(
                 "/data/esplab/shared/model/initialized/nmme/hindcast/monthly/land_cover.nc"
             )
-            ds[v] = xr.where(ds_land["land"] == 1, np.nan, ds[v])
+            land = ds_land["land"]
+            # Normalize mask dims to (Y, X) and align to forecast grid
+            dim_rename = {}
+            if "lat" in land.dims:
+                dim_rename["lat"] = "Y"
+            if "lon" in land.dims:
+                dim_rename["lon"] = "X"
+            if dim_rename:
+                land = land.rename(dim_rename)
+
+            if set(("Y", "X")).issubset(land.dims):
+                land = land.interp(Y=ds["Y"], X=ds["X"], method="nearest")
+                ds[v] = ds[v].where(land != 1)
 
         # ----------------------------------
         # Region loop
@@ -172,13 +209,17 @@ def _plot_variable_for_region(
                 [4, 5, 6],
                 [7, 0, 0]]
 
-        f, axs = pplt.subplots(
-            grid,
-            proj=reg["mproj"],
-            proj_kw={"lon_0": reg["clon"]},
-            width=11,
-            height=8.5
+        proj = _proj_from_region(reg)
+        data_crs = ccrs.PlateCarree()
+        fig, axs = plt.subplots(
+            3, 3,
+            figsize=(11, 8.5),
+            subplot_kw={"projection": proj},
+            constrained_layout=True,
         )
+        axs_flat = axs.flatten()
+        for i, ax in enumerate(axs_flat):
+            ax.set_visible(i in MODEL_PLOT_LOCS.values())
 
         valid_ts = _valid_time_for_lead(ds, ilead)
         fcstmonth_str = valid_ts.strftime("%b")
@@ -214,24 +255,35 @@ def _plot_variable_for_region(
             else:
                 title = f"MME (IC: {fcstdate}; {sub_nens} Ens )"
 
-            norm = pplt.Norm("diverging", vcenter=0)
+            norm = TwoSlopeNorm(vcenter=0)
 
             m = _plot_single_panel(
-                axs[iplot], ds_sel, v,
+                axs_flat[iplot], ds_sel, v,
                 var_params["scale_factor"],
                 var_params["clevs"],
-                var_params["cmap"],
+                _cmap_from_name(var_params["cmap"]),
                 norm,
                 title,
                 reg["mproj"],
                 reg["lons"],
                 reg["lats"],
-                reg["state_colors"]
+                reg["state_colors"],
+                data_crs,
             )
 
-        f.format(suptitle=suptitle)
-        f.colorbar(m, loc="b", label=var_params["units"], length=0.7)
+        fig.suptitle(suptitle, fontsize=12)
+        if "m" in locals():
+            used_axes = [axs_flat[i] for i in sorted(MODEL_PLOT_LOCS.values())]
+            fig.colorbar(
+                m,
+                ax=used_axes,
+                orientation="horizontal",
+                fraction=0.04,
+                pad=0.04,
+                label=var_params["units"],
+            )
 
         out = f"{figname}Month{ilead}.png"
         print(f"Writing figure: {out}")
-        f.save(out)
+        fig.savefig(out, dpi=100)
+        plt.close(fig)

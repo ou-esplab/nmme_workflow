@@ -1,15 +1,37 @@
 from pathlib import Path
 import xarray as xr
+from utils.nmme_metadata import init_models
+
+
+def _set_global_attrs(ds: xr.Dataset, fcstdate: str, units: str) -> xr.Dataset:
+    ds.attrs["title"] = "NMME monthly/seasonal ensemble-mean anomalies"
+    ds.attrs["forecast_init"] = fcstdate
+    ds.attrs["units"] = units
+    ds.attrs["source"] = "nmme_workflow"
+    return ds
+
+
+def _normalize_spatial_coords(ds: xr.Dataset) -> xr.Dataset:
+    rename = {}
+    if "X" in ds.coords:
+        rename["X"] = "lon"
+    if "Y" in ds.coords:
+        rename["Y"] = "lat"
+    if rename:
+        ds = ds.rename(rename)
+    return ds
 
 def nmme_write(ds_fcst, fcstdate):
 
     print("WRITING DATA")
 
     # Get model / variable metadata (unchanged)
-    models_list, all_varnames, all_plevstrs, all_units = initModels()
+    models_list, vname_map, all_plevstrs, unit_map = init_models()
+    all_varnames = list(vname_map.keys())
 
     # Loop over variables
-    for v, p, u in zip(all_varnames, all_plevstrs, all_units):
+    for v, p in zip(all_varnames, all_plevstrs):
+        u = unit_map.get(v, "unknown")
 
         ds_model_list = []
 
@@ -74,8 +96,8 @@ def nmme_write(ds_fcst, fcstdate):
         # ---------- Merge models ----------
         ds_models = xr.merge(ds_model_list, compat="override")
 
-        # ---------- Global attributes (unchanged) ----------
-        ds_models = setattrs(ds_models, fcstdate, u)
+        # ---------- Global attributes ----------
+        ds_models = _set_global_attrs(ds_models, fcstdate, u)
 
         # ---------- Time axis from valid months (unchanged) ----------
         ds_models["lead"] = ds_fcst["valid"].values
@@ -84,10 +106,12 @@ def nmme_write(ds_fcst, fcstdate):
         ds_models["time"].attrs["long_name"] = "Forecast Valid Month"
 
         # ---------- Longitude shift (unchanged) ----------
-        ds_models = ds_models.assign_coords(
-            lon=(((ds_models["lon"] + 180) % 360) - 180)
-        )
-        ds_models = ds_models.sortby(ds_models["lon"])
+        ds_models = _normalize_spatial_coords(ds_models)
+        if "lon" in ds_models.coords:
+            ds_models = ds_models.assign_coords(
+                lon=(((ds_models["lon"] + 180) % 360) - 180)
+            )
+            ds_models = ds_models.sortby(ds_models["lon"])
 
         # ---------- Write monthly ----------
         ds_models.to_netcdf(ofname_mon)

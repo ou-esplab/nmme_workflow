@@ -37,6 +37,7 @@ def main() -> int:
     ap.add_argument("--lon_minmax", nargs=2, type=float, default=None, help="Longitude bounds")
     ap.add_argument("--training_season", default=None, help="Season string like Feb-Apr")
     ap.add_argument("--only", default=None, help="Legacy region selector")
+    ap.add_argument("--models", nargs="+", default=None, help="Optional model override list")
     ap.add_argument("--dry-run", action="store_true", help="Run without invoking CPT executable")
 
     args = ap.parse_args()
@@ -76,6 +77,8 @@ def main() -> int:
         region["season"] = args.training_season
 
     models_used = U.resolve_models(cfg.get("models", []), region)
+    if args.models:
+        models_used = list(args.models)
 
     local_cfg = cfg["data"]["local"]
     root = Path(local_cfg["root"])
