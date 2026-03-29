@@ -1,4 +1,4 @@
-name: nmme_workflow_env
+name: pycpt-2.8.2
 channels:
   - conda-forge
   - iri-nextgen

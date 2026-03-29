@@ -42,7 +42,14 @@ Project utilities are organized under `utils/`:
 Legacy compatibility module remains at the repo root:
    - `nmme_pycpt_utils.py` (imports from `utils/nmme_pycpt_utils.py`)
 
-Create using conda:
+Recommended install (reproducible from known-good environment):
+
+```bash
+conda create -n nmme_workflow_env --file environment.from-pycpt-2.8.2.lock.txt
+conda activate nmme_workflow_env
+```
+
+Alternative install from environment.yml:
 
 ```bash
 conda config --set channel_priority strict
@@ -55,6 +62,13 @@ If environment creation fails with missing CPT packages, install explicitly from
 ```bash
 conda config --add channels iri-nextgen
 conda install -n nmme_workflow_env cptbin cptcore cptio cptdl cptextras
+```
+
+If you see `SafetyError` for `cptcore` or `pycpt`, clear local conda caches and retry:
+
+```bash
+conda clean --packages --tarballs -y
+conda env create -f environment.yml -n nmme_workflow_env --solver=libmamba
 ```
 
 If conda solver is slow or hangs, use the libmamba solver:
@@ -93,7 +107,7 @@ python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 Use `--dry-run` to validate inputs and processing steps without requiring `cpt` binary or producing CPT outputs:
 
 ```bash
-./pycpt_seasonal_rt.py --dry-run confignmme.yaml 202601 --only Mexico
+./pycpt-seasonal_rt.py --dry-run confignmme.yaml 202601 --only Mexico
 ```
 
 Dry-run behavior:

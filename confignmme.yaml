@@ -23,6 +23,10 @@ pycpt_regions:
     season: Feb-Apr
     models:
       - NASA-GEOSS2S
+      - CanESM5
+      - GEM5.2-NEMO
+      - NCEP-CFSv2
+      - COLA-RSMAS-CCSM4
 
   - name: Iran
     lat: [24, 40]

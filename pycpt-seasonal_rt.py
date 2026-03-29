@@ -15,7 +15,7 @@ import datetime as dt
 import xarray as xr
 import numpy as np
 
-import nmme_pycpt_utils as U
+from utils import nmme_pycpt_utils as U
 from cptcore.functional import cca
 
 
