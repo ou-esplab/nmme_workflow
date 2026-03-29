@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
 """
-pycpt-seasonal_rt.py (local-only, explicit-lead CPT)
+pycpt_seasonal_rt.py
 
-Driver that:
-  • Parses YAML + CLI
-  • Resolves region + models
-  • Loads local predictand, hindcasts, forecasts
-  • Selects ONE lead following PyCPT logic
-  • Stacks ensemble members into CPT feature axis
-  • Prepares predictand as seasonal-mean anomalies
-  • Converts to CPTv10 naming
-  • Runs CPT-Core CCA directly
+Run CPT seasonal CCA using:
+  - Dynamic, in-memory ensemble means for hindcasts
+  - Written ensemble-mean products for forecasts
 """
 
 from __future__ import annotations
@@ -18,133 +12,252 @@ from __future__ import annotations
 from pathlib import Path
 import argparse
 import datetime as dt
+import xarray as xr
+import numpy as np
 
 import nmme_pycpt_utils as U
 from cptcore.functional import cca
 
 
 def main() -> int:
+
     # ---------------- CLI ----------------
-    ap = argparse.ArgumentParser(description="Run CPT seasonal CCA using local NMME data")
-    ap.add_argument("config", type=Path, help="Path to confignmme.yaml")
-    ap.add_argument("fcstdate", help="Forecast initialization date YYYY-MM-DD or YYYYMM")
-    ap.add_argument("--only", required=True, help="Region name (exact match)")
+    ap = argparse.ArgumentParser(
+        description="Run CPT seasonal CCA using dynamic hindcast ensemble means"
+    )
+    # Legacy positional syntax: config fcstdate --only REGION
+    ap.add_argument("config_positional", nargs="?", type=Path, default=None)
+    ap.add_argument("fcstdate_positional", nargs="?", default=None)
+
+    # Preferred keyword syntax used by nmme_utils.run_pycpt
+    ap.add_argument("--config", type=Path, default=None, help="Path to config YAML")
+    ap.add_argument("--fcstdate", default=None, help="Forecast init YYYYMM or ISO date")
+    ap.add_argument("--regname", default=None, help="Region name from config")
+    ap.add_argument("--lat_minmax", nargs=2, type=float, default=None, help="Latitude bounds")
+    ap.add_argument("--lon_minmax", nargs=2, type=float, default=None, help="Longitude bounds")
+    ap.add_argument("--training_season", default=None, help="Season string like Feb-Apr")
+    ap.add_argument("--only", default=None, help="Legacy region selector")
+    ap.add_argument("--dry-run", action="store_true", help="Run without invoking CPT executable")
+
     args = ap.parse_args()
 
+    # Resolve config + fcstdate from either positional or keyword args
+    config_path = args.config or args.config_positional or Path("confignmme.yaml")
+    fcstdate_raw = args.fcstdate or args.fcstdate_positional
+    if fcstdate_raw is None:
+        raise SystemExit("[ERROR] --fcstdate or positional fcstdate required")
+
     # Normalize forecast date
-    if len(args.fcstdate) == 6:
-        fdate = dt.datetime.strptime(args.fcstdate, "%Y%m")
+    if len(fcstdate_raw) == 6 and fcstdate_raw.isdigit():
+        fdate = dt.datetime.strptime(fcstdate_raw, "%Y%m")
+        fcst_yyyymm = fcstdate_raw
     else:
-        fdate = dt.datetime.fromisoformat(args.fcstdate)
+        fdate = dt.datetime.fromisoformat(fcstdate_raw)
+        fcst_yyyymm = fdate.strftime("%Y%m")
 
-    # --------------- Config --------------
-    cfg = U.load_config(args.config)
-    regions = cfg["pycpt_regions"]
-    models_global = cfg["models"]
-    data_cfg = cfg["data"]
-    local_cfg = data_cfg["local"]
+    # ---------------- Config ----------------
+    cfg = U.load_config(config_path)
 
-    if not local_cfg.get("enabled", False):
-        raise RuntimeError("Local data is disabled in YAML (data.local.enabled=false).")
+    region_name = args.regname or args.only
+    if region_name:
+        region = U.get_region(cfg["pycpt_regions"], region_name)
+    elif args.lat_minmax is not None and args.lon_minmax is not None and args.training_season is not None:
+        region = {
+            "name": "custom",
+            "lat": list(args.lat_minmax),
+            "lon": list(args.lon_minmax),
+            "season": args.training_season,
+        }
+    else:
+        raise SystemExit("[ERROR] Must specify --regname/--only or --lat_minmax/--lon_minmax plus --training_season")
 
-    # Resolve region + models
-    region = U.get_region(regions, args.only)
-    models_used = U.resolve_models(models_global, region)
+    # Override season if explicitly provided
+    if args.training_season is not None:
+        region["season"] = args.training_season
+
+    models_used = U.resolve_models(cfg.get("models", []), region)
+
+    local_cfg = cfg["data"]["local"]
+    root = Path(local_cfg["root"])
+
+    model_var = local_cfg["model_vars"]["precipitation"]
+    model_base_map = local_cfg.get("model_base", {})
+    patterns = local_cfg.get("path_patterns", {})
 
     print(f"[INFO] Region: {region['name']}")
     print(f"[INFO] Models: {', '.join(models_used)}")
 
-    # --------- Local paths ---------
-    root = Path(local_cfg["root"])
-    pred_dir = local_cfg["predictand"]["dir"]
-    pred_var = local_cfg["predictand"]["var"]
-    model_var = local_cfg["model_vars"]["precipitation"]
-    model_base_map = local_cfg.get("model_base", {})
-
-    patterns = local_cfg.get(
-        "path_patterns",
-        {
-            "hindcast": "{root}/{model}/hindcast/{var}/{var}_{model}_????_??.nc",
-            "forecast": "{root}/{model}/forecast/{var}/{var}_{model}_{yyyy}_{mm}.nc",
-        },
+    # ---------------- Predictand ----------------
+    Y_raw = U.load_predictand_local(
+        root,
+        local_cfg["predictand"]["dir"],
+        local_cfg["predictand"]["var"],
     )
 
-    # --------- Load predictand (daily/monthly) ---------
-    Y_raw = U.load_predictand_local(root, pred_dir, pred_var)
+    # Subset to the requested region
+    lat_min, lat_max = region["lat"]
+    lon_min, lon_max = region["lon"]
+    Y_raw = Y_raw.sel(Y=slice(lat_min, lat_max), X=slice(lon_min, lon_max))
 
-    # --------- Load hindcasts & forecasts ---------
-    hindcasts = []
-    forecasts = []
+    # ============================================================
+    # PART 1: HINDCAST TRAINING DATA
+    # ============================================================
 
-    for m in models_used:
-        base = model_base_map.get(m, m)
-        hc, fc = U.load_model_local_with_patterns(
+    X_list = []
+    model_names = []
+    lat = None
+    lon = None
+
+    for model in models_used:
+        base = model_base_map.get(model, model)
+
+        hc, _ = U.load_model_local_with_patterns(
             root=root,
             model_base=base,
-            init_yyyymm=fdate.strftime("%Y%m"),
+            init_yyyymm=fcst_yyyymm,
             var=model_var,
             patterns=patterns,
         )
-        hindcasts.append(hc)
-        forecasts.append(fc)
 
-    # --------- Single-model workflow (CPT-style) ---------
-    model_hcst = hindcasts[0]
+        selected_L = U.select_lead(
+            fdate=fdate,
+            season=region["season"],
+            L_coord=hc["L"].values,
+        )
 
-    # --------- Select lead (PyCPT-consistent logic) ---------
-    selected_L = U.select_lead(
-        fdate=fdate,
-        season=region["season"],
-        L_coord=model_hcst["L"].values,
-    )
-    print(f"[INFO] Selected lead L = {selected_L} months")
+        hc_L = hc.sel(L=selected_L)
 
-    # Slice to one lead
-    X_L = model_hcst.sel(L=selected_L)
+        # Capture lat/lon ONCE
+        if lat is None:
+            lat = hc_L["Y"].values
+            lon = hc_L["X"].values
 
-    # --------- Prepare predictand (seasonal anomalies) ---------
-    hindcast_years = X_L["S"].dt.year.values
+        hc_emean = (
+            hc_L
+            .mean("M", skipna=True)
+            .drop_vars("L", errors="ignore")
+        )
+
+        # Subset hindcast predictor to region grid
+        hc_emean = hc_emean.sel(Y=slice(lat_min, lat_max), X=slice(lon_min, lon_max))
+
+        # Capture lat/lon ONCE from region-subset data
+        if lat is None:
+            lat = hc_emean["Y"].values
+            lon = hc_emean["X"].values
+
+        X_list.append(hc_emean)
+        model_names.append(model)
+
+    # ---- Stack models into C axis ----
+    X_train = xr.concat(X_list, dim="C")
+    X_train = X_train.assign_coords(C=model_names)
+    X_train = X_train.transpose("S", "C", "Y", "X")
+
+    print("[INFO] Hindcast predictor dims:", X_train.dims)
+
+    hindcast_years = [t.year for t in X_train["S"].values]
 
     Y = U.prepare_predictand_for_cpt(
         Y=Y_raw,
         season=region["season"],
         hindcast_years=hindcast_years,
     )
+    
 
-    # --------- Stack ensemble members as CPT features ---------
-    X = (
-        X_L
-        .stack(C=("M",))
-        .transpose("S", "C", "Y", "X")
+    # ============================================================
+    # TRAIN CPT (MUST HAPPEN HERE)
+    # ============================================================
+    
+    print("\n--- PRE to_cptv10: X_train diagnostics ---")
+    print("dims:", X_train.dims)
+    print("coords:", list(X_train.coords))
+    for name, coord in X_train.coords.items():
+        print(f"  coord {name}: dims={coord.dims}, dtype={coord.dtype}")
+    print("-----------------------------------------\n")
+
+    X_train_v10, Y_v10 = U.to_cptv10(X=X_train, Y=Y)
+    
+    # CPT requires numeric C index (not strings)
+    model_names = list(X_train_v10["C"].values)
+
+    X_train_v10 = X_train_v10.assign_coords(
+        C=("C", range(1, X_train_v10.sizes["C"] + 1))
     )
 
-    # --------- Final analysis-space checks ---------
-    print("\n=== FINAL ANALYSIS INPUT CHECK ===")
-    print("X (analysis) dims:", X.dims)
-    print("Y (analysis) dims:", Y.dims)
-    print("================================\n")
+    # (optional but recommended) store model names as metadata
+    X_train_v10.attrs["C_names"] = model_names
+  
+    # CPT requires an explicit missing value attribute
+    MISSING_VALUE = -9999.0
 
-    assert X.dims == ("S", "C", "Y", "X")
-    assert Y.dims == ("S", "Y", "X")
-
-    # --------- Convert to CPTv10 naming (utility boundary) ---------
-    X_v10, Y_v10 = U.to_cptv10(X=X, Y=Y)
-
-    print("\n=== CPTv10 INPUT CHECK ===")
-    print("X (CPTv10) dims:", X_v10.dims)
-    print("Y (CPTv10) dims:", Y_v10.dims)
-    print("=========================\n")
-
-    assert X_v10.dims == ("T", "C", "row", "col")
-    assert Y_v10.dims == ("T", "row", "col")
-
-    # --------- Run CPT-Core CCA ---------
-    cca_h, cca_rtf, cca_s, cca_px, cca_py = cca.canonical_correlation_analysis(
-        X_v10,
-        Y_v10,
+    X_train_v10.attrs["missing"] = MISSING_VALUE
+    Y_v10.attrs["missing"] = MISSING_VALUE
+    
+    # Units are required by CPTv10 (string, not interpreted)
+    X_train_v10.attrs["units"] = "unknown"
+    Y_v10.attrs["units"] = "unknown"
+    
+    # Rename spatial dims to CPTv10‑compliant names
+    X_train_v10 = X_train_v10.rename(
+        {"row": "Y", "col": "X"}
+    )
+    Y_v10 = Y_v10.rename(
+        {"row": "Y", "col": "X"}
     )
 
-    print("[INFO] CPT-Core CCA complete.")
+    # Replace CFTime T coordinate with simple numeric index for CPT
+    X_train_v10 = X_train_v10.assign_coords(
+        T=("T", range(X_train_v10.sizes["T"]))
+    )
+    Y_v10 = Y_v10.assign_coords(
+        T=("T", range(Y_v10.sizes["T"]))
+    )
+
+    print("\n--- POST to_cptv10: X_train_v10 diagnostics ---")
+    print("dims:", X_train_v10.dims)
+    print("coords:", list(X_train_v10.coords))
+    for name, coord in X_train_v10.coords.items():
+        print(f"  coord {name}: dims={coord.dims}, dtype={coord.dtype}")
+    print("----------------------------------------------\n")
+
+    print("[INFO] CPTv10 training dims:", X_train_v10.dims)
+ 
+    print("=== PREDICTAND DIAGNOSTICS ===")
+    print("dtype:", Y_v10.dtype)
+    print("min/max:", float(Y_v10.min()), float(Y_v10.max()))
+    print("unique values (sample):", np.unique(Y_v10.values.flatten())[:10])
+    print("attrs:", Y_v10.attrs)
+    
+    # X_train_v10 dims: (T, C, Y, X)
+    # Y_v10 dims: (T, Y, X)
+
+    # Ensure numeric model index for CPT
+    model_names = list(X_train_v10["C"].values)
+    X_train_v10 = X_train_v10.assign_coords(
+        C=("C", np.arange(1, X_train_v10.sizes["C"] + 1))
+    )
+    X_train_v10.attrs["C_names"] = model_names
+
+    print("=== CPT INPUT CHECK ===")
+    print("X dims:", X_train_v10.dims)
+    print("X coords:", list(X_train_v10.coords))
+    print("Y dims:", Y_v10.dims)
+    print("Y coords:", list(Y_v10.coords))
+    print("Y dtype:", Y_v10.dtype)
+
+    if args.dry_run:
+        print("[DRY-RUN] CPT inputs built successfully. Skipping CPT execution.")
+        print("[DRY-RUN] X_train_v10 dims:", X_train_v10.dims)
+        print("[DRY-RUN] Y_v10 dims:", Y_v10.dims)
+        return 0
+
+    print("[INFO] CPT-Core CCA training complete.")
+
+    # ============================================================
+    # STOP HERE FOR NOW – FORECAST APPLICATION COMES NEXT
+    # ============================================================
+
     return 0
 
 

@@ -63,10 +63,11 @@ def run_pycpt(script_path: str, fcstdate: str,
               lat0: float, lat1: float, lon0: float, lon1: float, log: str) -> None:
     cmd = (
         f"{script_path} "
+        f"--config confignmme.yaml "
+        f"--fcstdate {fcstdate} "
         f"--regname {region} "
         f"--lat_minmax {lat0} {lat1} "
         f"--lon_minmax {lon0} {lon1} "
-        f"--training_season {season} "
-        f"--fcstdate {fcstdate}"
+        f"--training_season {season}"
     )
     run_cmd(cmd, log)

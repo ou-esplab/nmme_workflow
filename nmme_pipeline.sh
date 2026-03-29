@@ -1,6 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
+# Ensure conda environment is initialized and activated in noninteractive shell
+if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+  source "$HOME/miniconda3/etc/profile.d/conda.sh"
+  conda activate pycpt-2.8.2
+else
+  echo "[ERROR] conda initialization script not found: $HOME/miniconda3/etc/profile.d/conda.sh" >&2
+  exit 1
+fi
+
 CONFIG="./config.yaml"
 UTILS="./nmme_fcst_utils.py"
 

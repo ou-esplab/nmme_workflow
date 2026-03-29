@@ -20,6 +20,8 @@ import xarray as xr
 import numpy as np
 import yaml
 
+from cptcore.base import CPT
+from cptio import to_cptv10 as cptio_to_cptv10
 
 # ============================================================
 # YAML / CONFIG HELPERS
@@ -49,6 +51,25 @@ def resolve_models(global_models: List[str], region: dict) -> List[str]:
 
 from datetime import datetime
 import numpy as np
+
+def load_emean_local(nmme_monthly_root, fcstdate, var, lev):
+    """
+    Load ensemble-mean monthly anomaly NMME product written by nmme_write.
+    """
+    from pathlib import Path
+    import xarray as xr
+
+    path = (
+        Path(nmme_monthly_root)
+        / fcstdate
+        / "data"
+        / f"NMME_fcst_{fcstdate}.anom.monthly.{var}_{lev}.emean.nc"
+    )
+
+    if not path.exists():
+        raise FileNotFoundError(f"Missing ensemble-mean product: {path}")
+
+    return xr.open_dataset(path)
 
 def select_lead(fdate, season, L_coord):
     """
@@ -507,3 +528,136 @@ def interp_to_target_grid(src: xr.DataArray, target: xr.DataArray) -> xr.DataArr
     src = _rename_to_cpt_dims(src)
     target = _rename_to_cpt_dims(target)
     return src.interp(X=target.X, Y=target.Y)
+
+
+def season_to_months(season: str):
+    """
+    Convert season string to list of calendar months.
+
+    Supports:
+      - Climatological seasons: DJF, MAM, JJA, SON
+      - Rolling seasons: FEB-APR, MAR-MAY, etc.
+
+    Returns
+    -------
+    list[int]
+        Months as integers 1–12
+    """
+    season = season.upper()
+
+    # --- climatological shorthand ---
+    clim_map = {
+        "DJF": [12, 1, 2],
+        "MAM": [3, 4, 5],
+        "JJA": [6, 7, 8],
+        "SON": [9, 10, 11],
+    }
+
+    if season in clim_map:
+        return clim_map[season]
+
+    # --- rolling seasons like FEB-APR ---
+    if "-" in season:
+        try:
+            start, end = season.split("-")
+            month_map = {
+                "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
+                "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
+                "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+            }
+
+            start_m = month_map[start]
+            end_m = month_map[end]
+
+            if start_m <= end_m:
+                return list(range(start_m, end_m + 1))
+            else:
+                # wrap around year boundary (e.g. NOV-JAN)
+                return list(range(start_m, 13)) + list(range(1, end_m + 1))
+
+        except (KeyError, ValueError):
+            pass
+
+    raise ValueError(f"Unknown season '{season}'")
+    
+
+def run_deterministic_cca_only(
+    X_train_v10,
+    Y_v10,
+):
+    """
+    Run deterministic CCA regression ONLY using CPT-Core.
+
+    No validation
+    No probabilistic logic
+    No climatological category checks
+
+    Parameters
+    ----------
+    X_train_v10 : xarray.DataArray
+        Predictor in CPTv10 form with dims (T, C, Y, X)
+    Y_v10 : xarray.DataArray
+        Predictand in CPTv10 form with dims (T, Y, X)
+
+    Returns
+    -------
+    det_fcst : xarray.DataArray
+        Deterministic MOS forecast
+    pev_fcst : xarray.DataArray
+        Prediction error variance
+    """
+
+    # --- Mandatory CPT attributes ---
+    for da in (X_train_v10, Y_v10):
+        da.attrs["missing"] = -9999.0
+        da.attrs["units"] = "unknown"
+
+    # --- Check cpt executable availability ---
+    import shutil
+    if shutil.which("cpt") is None:
+        raise RuntimeError(
+            "CPT executable not found in PATH. "
+            "Install it (e.g., 'conda install -c conda-forge cpt' or the appropriate package) "
+            "or ensure the command is available in the active environment."
+        )
+
+    # --- CPT instance (NO validation, NO skill) ---
+    cpt = CPT(
+        interactive=False,
+        output_files={
+            "original_predictor": "original_predictor",
+            "original_predictand": "original_predictand",
+            "deterministic_forecast": "deterministic_forecast",
+            "prediction_error_variance": "prediction_error_variance",
+        },
+    )
+
+    # --- Load predictor ---
+    cptio_to_cptv10(
+        X_train_v10,
+        cpt.outputs["original_predictor"],
+        row="Y",
+        col="X",
+        T="T",
+        C="C",
+    )
+
+    # --- Load predictand ---
+    cptio_to_cptv10(
+        Y_v10,
+        cpt.outputs["original_predictand"],
+        row="Y",
+        col="X",
+        T="T",
+    )
+
+    # --- Deterministic CCA regression only ---
+    cpt.write(10)   # select CCA
+    cpt.write(1)    # deterministic output
+    cpt.write(4)    # perform regression
+
+    # --- Read outputs ---
+    det_fcst = cpt.read(cpt.outputs["deterministic_forecast"])
+    pev_fcst = cpt.read(cpt.outputs["prediction_error_variance"])
+
+    return det_fcst, pev_fcst
