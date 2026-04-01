@@ -319,9 +319,18 @@ def decode_cf_time(ds: xr.Dataset, time_var: str) -> xr.Dataset:
 
     cal = ds[time_var].attrs.get("calendar")
 
-    # Normalize non-CF calendar aliases
+    # Normalize non-CF calendar aliases on all time-like coordinates because
+    # xr.decode_cf decodes every CF time variable in the dataset.
     if cal == "360":
         ds[time_var].attrs["calendar"] = "360_day"
+    for var_name, var_obj in ds.variables.items():
+        if "units" not in var_obj.attrs:
+            continue
+        units = str(var_obj.attrs.get("units", ""))
+        if "since" not in units:
+            continue
+        if var_obj.attrs.get("calendar") == "360":
+            ds[var_name].attrs["calendar"] = "360_day"
 
     # Decode using CF conventions + cftime
     ds = xr.decode_cf(ds, decode_times=True, use_cftime=True)
