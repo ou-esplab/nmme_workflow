@@ -11,6 +11,7 @@ models:
   - GEM5.2-NEMO
   - NCEP-CFSv2
   - COLA-RSMAS-CCSM4
+  - COLA-RSMAS-CESM1
 
 
 # ------------------------------------------------------------
@@ -27,6 +28,7 @@ pycpt_regions:
       - GEM5.2-NEMO
       - NCEP-CFSv2
       - COLA-RSMAS-CCSM4
+      - COLA-RSMAS-CESM1
 
   - name: Iran
     lat: [24, 40]
@@ -63,6 +65,7 @@ data:
       GEM5.2-NEMO: GEM5.2-NEMO
       NCEP-CFSv2: NCEP-CFSv2
       COLA-RSMAS-CCSM4: COLA-RSMAS-CCSM4
+      COLA-RSMAS-CESM1: COLA-RSMAS-CESM1
 
     path_patterns:
       # Hindcasts live across many years -> use wildcards for yyyy/mm
@@ -92,6 +95,25 @@ environments:
 pipeline:
   run_pycpt: true
   run_nmme_fcst_plots: true
+  sfs:
+    enabled: true
+    dry_run: false
+    variables: "prec tref sst"
+    reforecast_enabled: true
+    reforecast_dry_run: false
+    reforecast_script: ./download_sfs_reforecast_prec.sh
+    reforecast_root: s3://noaa-oar-sfsdev-pds/experiments/beta1/reforecast
+    reforecast_months: ""
+    reforecast_start_year: 1991
+    reforecast_end_year: 2100
+    reforecast_max_downloads: 0
+    climo_enabled: true
+    climo_python: python3
+    climo_script: ./make_sfs_climo_from_reforecast.py
+    climo_input_dir: /data/esplab/nmme-backup/NOAA-SFS/reforecast  # base dir; per-var subdir appended at runtime
+    climo_output_dir: /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020
+    climo_start_year: 1991
+    climo_end_year: 2020
 
 
 # ------------------------------------------------------------

@@ -18,18 +18,93 @@ MIN_BYTES=${MIN_BYTES:-4096}
 # Root for downloads
 DATA_ROOT="${DATA_ROOT:-/data/esplab/nmme-backup}"
 
+# Config path (used for optional SFS settings)
+NMME_CONFIG="${NMME_CONFIG:-confignmme.yaml}"
+INIT_YYYYMM="${INIT_YYYYMM:-}"
+
+cfg_get() {
+  local key="$1"
+  local default="$2"
+
+  if [[ ! -f "$NMME_CONFIG" ]] || ! command -v python3 >/dev/null 2>&1; then
+  echo "$default"
+  return
+  fi
+
+  python3 - "$NMME_CONFIG" "$key" "$default" <<'PY'
+import sys
+
+cfg_path, key, default = sys.argv[1:]
+
+try:
+  import yaml
+except Exception:
+  print(default)
+  raise SystemExit(0)
+
+try:
+  with open(cfg_path, "r") as f:
+    data = yaml.safe_load(f) or {}
+except Exception:
+  print(default)
+  raise SystemExit(0)
+
+cur = data
+for part in key.split('.'):
+  if not isinstance(cur, dict) or part not in cur:
+    print(default)
+    raise SystemExit(0)
+  cur = cur[part]
+
+if isinstance(cur, bool):
+  print("1" if cur else "0")
+elif cur is None:
+  print(default)
+else:
+  print(cur)
+PY
+}
+
 # Networking
-REQUEST_PAUSE=${REQUEST_PAUSE:-0.2}
+REQUEST_PAUSE=${REQUEST_PAUSE:-0.5}
 SPIDER_TIMEOUT=${SPIDER_TIMEOUT:-4}
 SPIDER_TRIES=${SPIDER_TRIES:-1}
-DL_TIMEOUT=${DL_TIMEOUT:-10}
-DL_TRIES=${DL_TRIES:-2}
+DL_TIMEOUT=${DL_TIMEOUT:-30}
+DL_TRIES=${DL_TRIES:-5}
 HARD_TIMEOUT_PROBE=${HARD_TIMEOUT_PROBE:-12}
-HARD_TIMEOUT_DOWNLOAD=${HARD_TIMEOUT_DOWNLOAD:-180}
+HARD_TIMEOUT_DOWNLOAD=${HARD_TIMEOUT_DOWNLOAD:-300}
 
 # Restrict to one or more models while testing (space-separated), e.g.:
 # export ONLY_MODELS="COLA-RSMAS-CCSM4 NCEP-CFSv2"
 ONLY_MODELS="${ONLY_MODELS:-}"
+
+# Optional SFS AWS forecast ingest
+SFS_AWS_ENABLED="${SFS_AWS_ENABLED:-$(cfg_get 'pipeline.sfs.enabled' '1')}"
+SFS_AWS_DRY_RUN="${SFS_AWS_DRY_RUN:-$(cfg_get 'pipeline.sfs.dry_run' '0')}"
+SFS_VARS="${SFS_VARS:-$(cfg_get 'pipeline.sfs.variables' 'prec tref sst')}"
+
+# Optional SFS reforecast sync (all vars in SFS_VARS)
+SFS_REFORECAST_ENABLED="${SFS_REFORECAST_ENABLED:-$(cfg_get 'pipeline.sfs.reforecast_enabled' '1')}"
+SFS_REFORECAST_DRY_RUN="${SFS_REFORECAST_DRY_RUN:-$(cfg_get 'pipeline.sfs.reforecast_dry_run' '0')}"
+SFS_REFORECAST_SCRIPT="${SFS_REFORECAST_SCRIPT:-$(cfg_get 'pipeline.sfs.reforecast_script' './download_sfs_reforecast_prec.sh')}"
+SFS_REFORECAST_ROOT="${SFS_REFORECAST_ROOT:-$(cfg_get 'pipeline.sfs.reforecast_root' 's3://noaa-oar-sfsdev-pds/experiments/beta1/reforecast')}"
+SFS_REFORECAST_MONTHS="${SFS_REFORECAST_MONTHS:-$(cfg_get 'pipeline.sfs.reforecast_months' '')}"
+SFS_REFORECAST_START_YEAR="${SFS_REFORECAST_START_YEAR:-$(cfg_get 'pipeline.sfs.reforecast_start_year' '1991')}"
+SFS_REFORECAST_END_YEAR="${SFS_REFORECAST_END_YEAR:-$(cfg_get 'pipeline.sfs.reforecast_end_year' '2100')}"
+SFS_REFORECAST_MAX_DOWNLOADS="${SFS_REFORECAST_MAX_DOWNLOADS:-$(cfg_get 'pipeline.sfs.reforecast_max_downloads' '0')}"
+
+# Optional SFS climatology refresh from local reforecast files (per-var)
+SFS_CLIMO_ENABLED="${SFS_CLIMO_ENABLED:-$(cfg_get 'pipeline.sfs.climo_enabled' '1')}"
+SFS_CLIMO_PYTHON="${SFS_CLIMO_PYTHON:-$(cfg_get 'pipeline.sfs.climo_python' 'python3')}"
+SFS_CLIMO_SCRIPT="${SFS_CLIMO_SCRIPT:-$(cfg_get 'pipeline.sfs.climo_script' './make_sfs_climo_from_reforecast.py')}"
+SFS_CLIMO_INPUT_DIR="${SFS_CLIMO_INPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_input_dir' "${DATA_ROOT}/NOAA-SFS/reforecast/prec")}" 
+SFS_CLIMO_OUTPUT_DIR="${SFS_CLIMO_OUTPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_output_dir' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
+SFS_CLIMO_START_YEAR="${SFS_CLIMO_START_YEAR:-$(cfg_get 'pipeline.sfs.climo_start_year' '1991')}"
+SFS_CLIMO_END_YEAR="${SFS_CLIMO_END_YEAR:-$(cfg_get 'pipeline.sfs.climo_end_year' '2020')}"
+
+# Forecast file normalization
+NMME_NORMALIZE_PYTHON="${NMME_NORMALIZE_PYTHON:-python3}"
+NMME_NORMALIZE_SCRIPT="${NMME_NORMALIZE_SCRIPT:-./normalize_nmme_forecast_vars.py}"
 
 # --------------------- IRIDL roots & models ----------------- #
 BASE_URL="https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME"
@@ -66,7 +141,7 @@ variables=(prec olr tref sst h500 h200)
 valid_year()  { [[ "$1" =~ ^[0-9]{4}$ ]] && (( 10#$1 >= 1979 && 10#$1 <= curr_y )); }
 valid_month() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 12 )); }
 
-month_name_uc() { date -d "$1-$2-01" +%b | tr '[:lower:]' '[:upper:]'; }
+month_name_uc() { date -d "$1-$2-01" +%b; }
 
 # Pressure selector for heights (encoded parens)
 p_selector_component() {
@@ -135,6 +210,7 @@ probe_month_available() {
 # Strict: latest YYYYMM for (model,var) by end-of-name match only
 latest_local_yyyymm_for_var() {
   local model=$1 var=$2
+  local max_yyyymm=${3:-0}
   local path="${DATA_ROOT}/${model}/forecast/${var}"
   local latest=0
   [[ -d "$path" ]] || { echo 0; return; }
@@ -146,6 +222,9 @@ latest_local_yyyymm_for_var() {
       local m=$((10#${BASH_REMATCH[2]}))
       (( m>=1 && m<=12 )) || continue
       local key=$((10#$y*100 + 10#$m))
+      if (( max_yyyymm > 0 && key > max_yyyymm )); then
+        continue
+      fi
       (( key > latest )) && latest=$key
     fi
   done < <(find "$path" -maxdepth 1 -type f -name "${var}_${model}_*.nc" 2>/dev/null)
@@ -169,10 +248,19 @@ apply_model_min_start() {
 }
 
 # --------------------------- MAIN --------------------------- #
-curr_y=$((10#$(date +%Y)))
-curr_m=$((10#$(date +%m)))
+if [[ -n "$INIT_YYYYMM" ]]; then
+  if [[ ! "$INIT_YYYYMM" =~ ^[0-9]{6}$ ]]; then
+    echo "ERROR: INIT_YYYYMM must be YYYYMM" >&2
+    exit 2
+  fi
+  curr_y=$((10#${INIT_YYYYMM:0:4}))
+  curr_m=$((10#${INIT_YYYYMM:4:2}))
+else
+  curr_y=$((10#$(date +%Y)))
+  curr_m=$((10#$(date +%m)))
+fi
 now=$((10#$curr_y*100 + 10#$curr_m))
-log "NOW : curr_y=${curr_y} curr_m=${curr_m} now=${now}"
+log "NOW : curr_y=${curr_y} curr_m=${curr_m} now=${now} init_override=${INIT_YYYYMM:-none}"
 
 # Compute the earliest month in the recent window
 win_y=$curr_y; win_m=$curr_m
@@ -198,7 +286,7 @@ for model in "${!MODELURL[@]}"; do
   # Per-var: compute earliest month we care about = max(window_start, next_after_latest)
   declare -A START_FOR_VAR
   for var in "${variables[@]}"; do
-    latest=$(latest_local_yyyymm_for_var "$model" "$var")
+    latest=$(latest_local_yyyymm_for_var "$model" "$var" "$now")
     # next_after_latest
     if (( latest > 0 )); then
       vy=$((10#$latest/100)); vm=$((10#$latest%100))
@@ -269,6 +357,21 @@ for model in "${!MODELURL[@]}"; do
       fi
 
       log "SAVE: [$var] ${outfile} (${size} bytes)"
+
+      if [[ "$var" == "h200" || "$var" == "h500" ]]; then
+        if ! "$NMME_NORMALIZE_PYTHON" "$NMME_NORMALIZE_SCRIPT" \
+          --file "$outfile" \
+          --root "$DATA_ROOT" \
+          --model "$model" \
+          --requested-var "$var" \
+          --write
+        then
+          log "FAIL: [$var] normalization failed -> removing ${outfile}"
+          rm -f "$outfile"
+          continue
+        fi
+      fi
+
       sleep "$REQUEST_PAUSE"
     done
 
@@ -278,3 +381,64 @@ for model in "${!MODELURL[@]}"; do
 done
 
 echo "All model updates complete."
+
+if [[ "$SFS_AWS_ENABLED" == "1" ]]; then
+  log "SFS : running latest AWS SFS forecast ingest (vars: ${SFS_VARS})"
+  for sfs_var in $SFS_VARS; do
+    if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" LOCAL_VAR="$sfs_var" ./download_sfs_forecast_latest_prec.sh; then
+      log "SFS : WARN latest AWS SFS forecast ingest failed var=${sfs_var}; continuing"
+    fi
+  done
+else
+  log "SFS : disabled (set SFS_AWS_ENABLED=1 to enable)"
+fi
+
+if [[ "$SFS_REFORECAST_ENABLED" == "1" ]]; then
+  log "SFS : syncing reforecast vars from AWS (vars: ${SFS_VARS})"
+  if [[ ! -f "$SFS_REFORECAST_SCRIPT" ]]; then
+    log "SFS : WARN reforecast script not found: ${SFS_REFORECAST_SCRIPT}; continuing"
+  else
+    for sfs_var in $SFS_VARS; do
+      if ! DATA_ROOT="$DATA_ROOT" \
+        DRY_RUN="$SFS_REFORECAST_DRY_RUN" \
+        LOCAL_VAR="$sfs_var" \
+        S3_REFORECAST_ROOT="$SFS_REFORECAST_ROOT" \
+        MONTHS="$SFS_REFORECAST_MONTHS" \
+        START_YEAR="$SFS_REFORECAST_START_YEAR" \
+        END_YEAR="$SFS_REFORECAST_END_YEAR" \
+        MAX_DOWNLOADS="$SFS_REFORECAST_MAX_DOWNLOADS" \
+        "$SFS_REFORECAST_SCRIPT"; then
+        log "SFS : WARN reforecast sync failed var=${sfs_var}; continuing"
+      fi
+    done
+  fi
+else
+  log "SFS : reforecast sync disabled (set SFS_REFORECAST_ENABLED=1 to enable)"
+fi
+
+if [[ "$SFS_CLIMO_ENABLED" == "1" ]]; then
+  log "SFS : refreshing climatology from local reforecast (vars: ${SFS_VARS})"
+  if [[ ! -f "$SFS_CLIMO_SCRIPT" ]]; then
+    log "SFS : WARN climo script not found: ${SFS_CLIMO_SCRIPT}; continuing"
+  else
+    for sfs_var in $SFS_VARS; do
+      case "$sfs_var" in
+        tref) sfs_lev="2m" ;;
+        *) sfs_lev="sfc" ;;
+      esac
+      sfs_in_dir="${DATA_ROOT}/NOAA-SFS/reforecast/${sfs_var}"
+      sfs_out_file="${SFS_CLIMO_OUTPUT_DIR}/NOAA-SFS.${sfs_var}_${sfs_lev}.clim.1991-2020.nc"
+      if ! "$SFS_CLIMO_PYTHON" "$SFS_CLIMO_SCRIPT" \
+        --model "NOAA-SFS" \
+        --local-var "$sfs_var" \
+        --input-dir "$sfs_in_dir" \
+        --output-file "$sfs_out_file" \
+        --start-year "$SFS_CLIMO_START_YEAR" \
+        --end-year "$SFS_CLIMO_END_YEAR"; then
+        log "SFS : WARN climo refresh failed var=${sfs_var}; continuing"
+      fi
+    done
+  fi
+else
+  log "SFS : climo refresh disabled (set SFS_CLIMO_ENABLED=1 to enable)"
+fi

@@ -1,8 +1,14 @@
 # utils/nmme_io.py
 
 from pathlib import Path
+from typing import Optional
 import xarray as xr
 import pandas as pd
+
+from utils.nmme_var_names import (
+    forecast_storage_var_candidates,
+    normalize_forecast_dataset,
+)
 
 
 def open_local_forecast(
@@ -10,17 +16,22 @@ def open_local_forecast(
     model: str,
     var: str,
     time: pd.Timestamp,
-) -> xr.Dataset | None:
+) -> Optional[xr.Dataset]:
 
-    fpath = (
-        root
-        / model
-        / "forecast"
-        / var
-        / f"{var}_{model}_{time.year}_{time.month:02d}.nc"
-    )
+    fpath = None
+    for storage_var in forecast_storage_var_candidates(model, var):
+        candidate = (
+            root
+            / model
+            / "forecast"
+            / storage_var
+            / f"{storage_var}_{model}_{time.year}_{time.month:02d}.nc"
+        )
+        if candidate.exists():
+            fpath = candidate
+            break
 
-    if not fpath.exists():
+    if fpath is None:
         return None
 
     # Open WITHOUT CF decoding
@@ -29,9 +40,31 @@ def open_local_forecast(
     # Decode only S safely
     ds = decode_S_cftime(ds)
 
+    # Normalize external forecast files (e.g., NOAA-SFS) into workflow dims.
+    # Expected downstream dims are S, M, L, Y, X.
+    rename_map = {}
+    if "init" in ds.dims or "init" in ds.coords:
+        rename_map["init"] = "S"
+    if "member" in ds.dims or "member" in ds.coords:
+        rename_map["member"] = "M"
+    if "lead" in ds.dims or "lead" in ds.coords:
+        rename_map["lead"] = "L"
+    if "lat" in ds.dims or "lat" in ds.coords:
+        rename_map["lat"] = "Y"
+    if "latitude" in ds.dims or "latitude" in ds.coords:
+        rename_map["latitude"] = "Y"
+    if "lon" in ds.dims or "lon" in ds.coords:
+        rename_map["lon"] = "X"
+    if "longitude" in ds.dims or "longitude" in ds.coords:
+        rename_map["longitude"] = "X"
+    if rename_map:
+        ds = ds.rename(rename_map)
+
     # Normalize lead centers → integer indices
     if "L" in ds.coords:
         ds = ds.assign_coords(L=ds["L"].astype(int))
+
+    ds = normalize_forecast_dataset(ds, model, var)
 
     return ds
 
@@ -43,19 +76,24 @@ def open_monthly_climatology(
     lev: str,
     raw: xr.Dataset,
     time: pd.Timestamp,
-) -> xr.Dataset | None:
+) -> Optional[xr.Dataset]:
     """
     Open climatology file and select appropriate month.
     """
 
     fpath = clim_root / f"{model}.{var}_{lev}.clim.1991-2020.nc"
+
     if not fpath.exists():
         return None
 
     ds = xr.open_dataset(fpath)
 
     if "month" in ds.coords:
-        return ds.sel(month=int(time.month))
+        month_val = int(time.month)
+        months = set(int(m) for m in ds["month"].values.tolist())
+        if month_val not in months:
+            return None
+        return ds.sel(month=month_val)
 
     return ds
 
@@ -72,6 +110,10 @@ def decode_S_cftime(ds):
 
     units = ds["S"].attrs.get("units")
     calendar = ds["S"].attrs.get("calendar", "standard")
+
+    # If S is already decoded datetime-like (or units are absent), keep as-is.
+    if units is None:
+        return ds
 
     # Normalize malformed calendar
     if calendar == "360":

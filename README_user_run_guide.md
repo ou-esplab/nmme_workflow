@@ -94,6 +94,60 @@ python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 
 This runs the full end-to-end pipeline: ingest, products, pycpt.
 
+### SFS AWS Forecast Ingest (prec, tref, sst)
+
+The ingest stage now also pulls the latest NOAA SFS beta1 AWS forecast
+for precipitation, 2m temperature, and SST into:
+
+```bash
+<DATA_ROOT>/NOAA-SFS/forecast/<var>/<var>_NOAA-SFS_YYYY_MM.nc
+```
+
+Controls:
+
+```bash
+# disable SFS ingest
+SFS_AWS_ENABLED=0
+
+# run SFS in metadata-only mode
+SFS_AWS_DRY_RUN=1
+
+# override forecast root or cycle
+S3_FORECAST_ROOT=s3://noaa-oar-sfsdev-pds/experiments/beta1/forecast
+SFS_CYCLE=202603
+
+# disable/enable SFS climo refresh
+SFS_CLIMO_ENABLED=1
+
+# disable/enable SFS reforecast sync (prec only)
+SFS_REFORECAST_ENABLED=1
+SFS_REFORECAST_DRY_RUN=0
+
+# variables to sync from SFS
+SFS_VARS="prec tref sst"
+
+# optional reforecast sync filters
+SFS_REFORECAST_MONTHS="03,05"
+SFS_REFORECAST_START_YEAR=1991
+SFS_REFORECAST_END_YEAR=2100
+SFS_REFORECAST_MAX_DOWNLOADS=0
+
+# climo build controls (prec reforecast -> NOAA-SFS.prec_sfc climo)
+SFS_CLIMO_INPUT_DIR=/data/esplab/nmme-backup/NOAA-SFS/reforecast/prec
+SFS_CLIMO_OUTPUT_FILE=/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020/NOAA-SFS.prec_sfc.clim.1991-2020.nc
+SFS_CLIMO_START_YEAR=1991
+SFS_CLIMO_END_YEAR=2020
+```
+
+These same SFS controls can be managed in `confignmme.yaml` under
+`pipeline.sfs`. Environment variables still take precedence when set.
+
+Reforecast sync runs before SFS climatology refresh so newly posted
+reforecast files can be incorporated into the climo update in the same run.
+
+SST mapping detail: SFS SST is sourced from
+`ocn_monthly.zarr` variable `SST`.
+
 Legacy wrapper (deprecated, still available):
 
 ```bash

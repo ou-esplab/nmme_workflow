@@ -3,6 +3,7 @@ import os
 import sys
 import subprocess
 import argparse
+import shlex
 from datetime import datetime
 from pathlib import Path
 
@@ -77,7 +78,13 @@ def main() -> int:
     if args.system == "nmme":
 
         if "ingest" in args.stages:
-            stage_cmds["ingest"] = ["./nmme_update_fcsts.sh"]
+            cfg_q = shlex.quote(args.config)
+            init_q = shlex.quote(init_str)
+            stage_cmds["ingest"] = [
+                "bash",
+                "-lc",
+                f"NMME_CONFIG={cfg_q} INIT_YYYYMM={init_q} ./nmme_update_fcsts.sh",
+            ]
 
         if "products" in args.stages:
             if args.products_direct:

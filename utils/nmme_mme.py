@@ -64,6 +64,37 @@ def build_mme_for_month(
             continue
 
         # -------------------------------
+        # Normalize variable grids within this model
+        # -------------------------------
+        # Some models (e.g., NOAA-SFS) can provide variables on different
+        # native grids across variables. Interpolate all successful variables
+        # to the coarsest available Y/X grid for stable merging.
+        yx_candidates = [
+            i for i, ds_i in enumerate(var_datasets)
+            if "Y" in ds_i.sizes and "X" in ds_i.sizes
+        ]
+        if yx_candidates:
+            target_idx = min(
+                yx_candidates,
+                key=lambda i: var_datasets[i].sizes["Y"] * var_datasets[i].sizes["X"],
+            )
+            target_Y = var_datasets[target_idx]["Y"].values
+            target_X = var_datasets[target_idx]["X"].values
+
+            normalized_vars = []
+            for ds_i in var_datasets:
+                if (
+                    "Y" in ds_i.sizes and "X" in ds_i.sizes
+                    and (
+                        ds_i.sizes["Y"] != len(target_Y)
+                        or ds_i.sizes["X"] != len(target_X)
+                    )
+                ):
+                    ds_i = ds_i.interp(Y=target_Y, X=target_X, method="linear")
+                normalized_vars.append(ds_i)
+            var_datasets = normalized_vars
+
+        # -------------------------------
         # Merge variables for this model
         # -------------------------------
         ds_model = xr.merge(var_datasets, compat="override")
@@ -84,6 +115,21 @@ def build_mme_for_month(
         )
 
     # --------------------------------------------------
+    # Normalize grids: regrid models with different Y/X
+    # resolution to match the first model's grid.
+    # (e.g., NOAA-SFS is 0.5° while other NMME models
+    # are 1°; linear interpolation downsamples to 1°.)
+    # --------------------------------------------------
+    ref_Y = per_model[0]["Y"].values
+    ref_X = per_model[0]["X"].values
+    normalized = []
+    for ds in per_model:
+        if ds.sizes["Y"] != len(ref_Y) or ds.sizes["X"] != len(ref_X):
+            ds = ds.interp(Y=ref_Y, X=ref_X, method="linear")
+        normalized.append(ds)
+    per_model = normalized
+
+    # --------------------------------------------------
     # Combine models
     # --------------------------------------------------
     ds_models = xr.concat(
@@ -95,7 +141,11 @@ def build_mme_for_month(
     # Derive valid time ONCE globally
     # --------------------------------------------------
     S_cf = ds_models["S"].values[0]
-    S_ts = pd.Timestamp(S_cf.year, S_cf.month, 1)
+    if hasattr(S_cf, "year") and hasattr(S_cf, "month"):
+        S_ts = pd.Timestamp(S_cf.year, S_cf.month, 1)
+    else:
+        S_parsed = pd.to_datetime(S_cf)
+        S_ts = pd.Timestamp(S_parsed.year, S_parsed.month, 1)
     ds_models = add_valid_times(ds_models, S_ts)
 
     # --------------------------------------------------

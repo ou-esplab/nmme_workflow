@@ -25,8 +25,9 @@ from utils.config import load_config
 MODEL_DIR_MAP = {
     "NASA-GEOSS2S": "NASA-GEOSS2S",
     "CanESM5": "CanESM5",
-    "GEM5.2-NEMO": "GEM5-NEMO",
+    "GEM5.2-NEMO": "GEM5.2-NEMO",
     "NCEP-CFSv2": "NCEP-CFSv2",
+    "NOAA-SFS": "NOAA-SFS",
 }
 
 SEASON_LEADS: Dict[str, Tuple[int, int]] = {
@@ -97,11 +98,17 @@ def hindcast_thresholds_for_model(
     lat_bounds: Tuple[float, float],
     lon_bounds: Tuple[float, float],
     hind_root: Path,
+    sfs_hind_root: Path,
 ) -> Tuple[xr.DataArray, xr.DataArray]:
     model_dir = MODEL_DIR_MAP[model_name]
-    files = sorted(glob.glob(str(hind_root / model_dir / "*.nc")))
-    if not files:
-        raise FileNotFoundError(f"No hindcast files for {model_name} under {hind_root / model_dir}")
+    if model_name == "NOAA-SFS":
+        files = sorted(glob.glob(str(sfs_hind_root / "*.nc")))
+        if not files:
+            raise FileNotFoundError(f"No hindcast files for {model_name} under {sfs_hind_root}")
+    else:
+        files = sorted(glob.glob(str(hind_root / model_dir / "*.nc")))
+        if not files:
+            raise FileNotFoundError(f"No hindcast files for {model_name} under {hind_root / model_dir}")
 
     l0, l1 = SEASON_LEADS[season]
     sample_arrays = []
@@ -113,6 +120,23 @@ def hindcast_thresholds_for_model(
             continue
 
         da = ds["prec"]
+
+        # Normalize varying hindcast dimension names to the expected convention.
+        ren = {}
+        if "longitude" in da.dims:
+            ren["longitude"] = "lon"
+        if "latitude" in da.dims:
+            ren["latitude"] = "lat"
+        if "L" in da.dims:
+            ren["L"] = "lead"
+        if ren:
+            da = da.rename(ren)
+
+        # Collapse singleton initialization dimensions when present.
+        for init_dim in ("init", "S", "time"):
+            if init_dim in da.dims and da.sizes.get(init_dim, 0) == 1:
+                da = da.isel({init_dim: 0}, drop=True)
+
         da = to_0360(da)
         da = subset_region(da, lat_bounds, lon_bounds)
 
@@ -121,6 +145,10 @@ def hindcast_thresholds_for_model(
 
         if "ens" in da.dims:
             da = da.rename({"ens": "sample"})
+        elif "member" in da.dims:
+            da = da.rename({"member": "sample"})
+        elif "M" in da.dims:
+            da = da.rename({"M": "sample"})
         else:
             da = da.expand_dims(sample=[0])
 
@@ -142,6 +170,7 @@ def compute_region_probabilities(
     lat_bounds: Tuple[float, float],
     lon_bounds: Tuple[float, float],
     hind_root: Path,
+    sfs_hind_root: Path,
 ) -> Dict[str, xr.DataArray]:
     l0, l1 = SEASON_LEADS[season]
 
@@ -154,7 +183,14 @@ def compute_region_probabilities(
             print(f"[WARN] Forecast variable missing for {model_name}; skipping")
             continue
 
-        t33, t66 = hindcast_thresholds_for_model(model_name, season, lat_bounds, lon_bounds, hind_root)
+        t33, t66 = hindcast_thresholds_for_model(
+            model_name,
+            season,
+            lat_bounds,
+            lon_bounds,
+            hind_root,
+            sfs_hind_root,
+        )
 
         fc = to_0360(ds_fc[model_name].isel(L=slice(l0, l1)).mean("L"))
         fc = subset_region(fc, lat_bounds, lon_bounds)
@@ -236,6 +272,11 @@ def main() -> int:
     cfg = load_config(args.config)
     out_root = Path(cfg["data"]["output"]["nmme_monthly"])
     hind_root = Path("/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full")
+    sfs_hind_root = Path(
+        cfg.get("pipeline", {})
+        .get("sfs", {})
+        .get("climo_input_dir", "/data/esplab/nmme-backup/NOAA-SFS/reforecast")
+    ) / "prec"
 
     if args.seasons.upper() == "ALL":
         seasons = list(SEASON_LEADS.keys())
@@ -269,7 +310,14 @@ def main() -> int:
         for season in seasons:
             print(f"[INFO] Computing {rname} {season}")
             lead_label = build_target_label(args.init, season)
-            prob = compute_region_probabilities(ds_fc, season, lat_bounds, lon_bounds, hind_root)
+            prob = compute_region_probabilities(
+                ds_fc,
+                season,
+                lat_bounds,
+                lon_bounds,
+                hind_root,
+                sfs_hind_root,
+            )
             out_png = outdir / rname / f"NMME_{args.init}_{rname}_{season}_tercile_probs.png"
             plot_probabilities(prob, rname, season, args.init, lead_label, out_png)
             print(f"[INFO] Wrote {out_png}")

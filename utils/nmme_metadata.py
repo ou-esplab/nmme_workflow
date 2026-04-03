@@ -9,6 +9,7 @@ def init_models() -> Tuple[List[Dict[str, Any]], Dict[str, str], List[str], Dict
         {"model":"NCEP-CFSv2",   "varnames":["prec","olr","tref","sst","h500","h200"], "levstrs":["sfc","toa","2m","sfc","500","200"]},
         {"model":"COLA-RSMAS-CCSM4","varnames":["prec","olr","tref","sst","h500","h200"],"levstrs":["sfc","toa","2m","sfc","500","200"]},
         {"model":"COLA-RSMAS-CESM1","varnames":["prec","olr","tref","sst","h500","h200"],"levstrs":["sfc","toa","2m","sfc","500","200"]},
+        {"model":"NOAA-SFS", "varnames":["prec","tref","sst"], "levstrs":["sfc","2m","sfc"]},
     ]
     vnames = {v: v for v in ["prec","olr","tref","sst","h500","h200"]}
     levs   = ["sfc","toa","2m","sfc","500","200"]

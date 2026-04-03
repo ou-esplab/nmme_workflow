@@ -11,15 +11,17 @@ import cartopy.feature as cfeature
 from utils.nmme_plot_params import initPlotParams
 from utils.nmme_metadata import init_models
 
-MODEL_PLOT_LOCS = {
-"NASA-GEOSS2S": 0,
-"CanESM5": 1,
-"GFDL-SPEAR": 2,
-"GEM5.2-NEMO": 3,
-"NCEP-CFSv2": 4,
-"COLA-RSMAS-CCSM4": 5,
-"MME": 6,
-}
+PREFERRED_MODEL_ORDER = [
+    "NASA-GEOSS2S",
+    "CanESM5",
+    "GFDL-SPEAR",
+    "GEM5.2-NEMO",
+    "NCEP-CFSv2",
+    "COLA-RSMAS-CCSM4",
+    "COLA-RSMAS-CESM1",
+    "NOAA-SFS",
+    "MME",
+]
     
 # ============================================================
 # Time helpers (robust to cftime / pandas)
@@ -31,7 +33,10 @@ def _get_fcstdate_str(ds):
     Works for cftime and pandas-based S.
     """
     S = ds["S"].values[0]
-    return f"{S.year:04d}{S.month:02d}"
+    if isinstance(S, cftime.datetime):
+        return f"{S.year:04d}{S.month:02d}"
+    ts = pd.to_datetime(S)
+    return f"{ts.year:04d}{ts.month:02d}"
 
 
 def _valid_time_for_lead(ds, ilead):
@@ -130,6 +135,88 @@ def _cmap_from_name(name):
     return cmap_map.get(name, name)
 
 
+def _build_model_plot_locs(ds: xr.Dataset) -> dict[str, int]:
+    """
+    Build panel slot indices for models present in the dataset.
+    Keeps a stable preferred order and supports NOAA-SFS.
+    """
+    present = [str(m) for m in ds["model"].values.tolist()]
+
+    ordered = [m for m in PREFERRED_MODEL_ORDER if m in present]
+    extras = [m for m in present if m not in ordered]
+    ordered.extend(extras)
+
+    # 3x3 panel grid supports at most 9 models.
+    return {m: i for i, m in enumerate(ordered[:9])}
+
+
+def _balanced_levels_and_ticks(var_params: dict) -> tuple[np.ndarray, TwoSlopeNorm, np.ndarray]:
+    """
+    Build symmetric contour levels/ticks centered on zero.
+    """
+    base_levels = np.asarray(var_params["clevs"], dtype=float)
+    vmax = float(np.nanmax(np.abs(base_levels)))
+
+    # Use an odd number of levels so 0 is represented exactly.
+    n_levels = len(base_levels)
+    if n_levels % 2 == 0:
+        n_levels += 1
+
+    levels = np.linspace(-vmax, vmax, n_levels)
+    norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
+
+    # Evenly spaced colorbar labels including zero.
+    ticks = np.linspace(-vmax, vmax, 9)
+    return levels, norm, ticks
+
+
+def _align_longitudes_to_target(mask: xr.DataArray, target_x: xr.DataArray) -> xr.DataArray:
+    """
+    Align mask longitude coordinates to the target grid convention.
+    Supports both 0..360 and -180..180 style grids.
+    """
+    target_min = float(target_x.min())
+    target_max = float(target_x.max())
+
+    if target_min < 0:
+        mask = mask.assign_coords(X=(((mask["X"] + 180) % 360) - 180)).sortby("X")
+    else:
+        mask = mask.assign_coords(X=(mask["X"] % 360)).sortby("X")
+
+    mask = mask.sel(X=slice(target_min, target_max))
+    return mask
+
+
+def _mask_land_for_sst(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Mask SST land points for both member and ensemble-mean fields.
+    """
+    ds_land = xr.open_dataset(
+        "/data/esplab/shared/model/initialized/nmme/hindcast/monthly/land_cover.nc"
+    )
+    land = ds_land["land"]
+
+    dim_rename = {}
+    if "lat" in land.dims:
+        dim_rename["lat"] = "Y"
+    if "lon" in land.dims:
+        dim_rename["lon"] = "X"
+    if dim_rename:
+        land = land.rename(dim_rename)
+
+    if not set(("Y", "X")).issubset(land.dims):
+        return ds
+
+    land = _align_longitudes_to_target(land, ds["X"])
+    land = land.interp(Y=ds["Y"], X=ds["X"], method="nearest")
+
+    for var_name in ("sst", "sst_ensmean"):
+        if var_name in ds.data_vars:
+            ds[var_name] = ds[var_name].where(land != 1)
+
+    return ds
+
+
 # ============================================================
 # Main plotting entry point
 # ============================================================
@@ -141,17 +228,7 @@ def nmme_plot(ds, path):
     """
     var_params_dict, reg_params_dict = initPlotParams()
     models_meta, _, _, _ = init_models()
-    model_names = [m["model"] for m in models_meta]
-
-    MODEL_PLOT_LOCS = {
-    "NASA-GEOSS2S": 0,
-    "CanESM5": 1,
-    "GFDL-SPEAR": 2,
-    "GEM5.2-NEMO": 3,
-    "NCEP-CFSv2": 4,
-    "COLA-RSMAS-CCSM4": 5,
-    "MME": 6,
-    }
+    model_plot_locs = _build_model_plot_locs(ds)
 
     os.makedirs(path, exist_ok=True)
 
@@ -164,22 +241,7 @@ def nmme_plot(ds, path):
 
         # Mask land for SST
         if v == "sst":
-            ds_land = xr.open_dataset(
-                "/data/esplab/shared/model/initialized/nmme/hindcast/monthly/land_cover.nc"
-            )
-            land = ds_land["land"]
-            # Normalize mask dims to (Y, X) and align to forecast grid
-            dim_rename = {}
-            if "lat" in land.dims:
-                dim_rename["lat"] = "Y"
-            if "lon" in land.dims:
-                dim_rename["lon"] = "X"
-            if dim_rename:
-                land = land.rename(dim_rename)
-
-            if set(("Y", "X")).issubset(land.dims):
-                land = land.interp(Y=ds["Y"], X=ds["X"], method="nearest")
-                ds[v] = ds[v].where(land != 1)
+            ds = _mask_land_for_sst(ds)
 
         # ----------------------------------
         # Region loop
@@ -190,12 +252,12 @@ def nmme_plot(ds, path):
 
             _plot_variable_for_region(
                 ds, v, var_params, reg,
-                models_meta, figname
+                models_meta, figname, model_plot_locs
             )
 
 
 def _plot_variable_for_region(
-    ds, v, var_params, reg, models_list, figname
+    ds, v, var_params, reg, models_list, figname, model_plot_locs
 ):
     """
     Plot all leads for one variable/region pair.
@@ -219,7 +281,7 @@ def _plot_variable_for_region(
         )
         axs_flat = axs.flatten()
         for i, ax in enumerate(axs_flat):
-            ax.set_visible(i in MODEL_PLOT_LOCS.values())
+            ax.set_visible(i in model_plot_locs.values())
 
         valid_ts = _valid_time_for_lead(ds, ilead)
         fcstmonth_str = valid_ts.strftime("%b")
@@ -230,6 +292,8 @@ def _plot_variable_for_region(
             f"{lead} Months Lead"
         )
 
+        clevs, norm, ticks = _balanced_levels_and_ticks(var_params)
+
         sub_nens = 0
 
         # -------------------------------
@@ -238,7 +302,7 @@ def _plot_variable_for_region(
         for model in ds["model"].values:
             
             # Get plot location for each model
-            iplot = MODEL_PLOT_LOCS.get(model)
+            iplot = model_plot_locs.get(model)
             if iplot is None:
                 continue
             
@@ -255,12 +319,10 @@ def _plot_variable_for_region(
             else:
                 title = f"MME (IC: {fcstdate}; {sub_nens} Ens )"
 
-            norm = TwoSlopeNorm(vcenter=0)
-
             m = _plot_single_panel(
                 axs_flat[iplot], ds_sel, v,
                 var_params["scale_factor"],
-                var_params["clevs"],
+                clevs,
                 _cmap_from_name(var_params["cmap"]),
                 norm,
                 title,
@@ -273,13 +335,14 @@ def _plot_variable_for_region(
 
         fig.suptitle(suptitle, fontsize=12)
         if "m" in locals():
-            used_axes = [axs_flat[i] for i in sorted(MODEL_PLOT_LOCS.values())]
+            used_axes = [axs_flat[i] for i in sorted(model_plot_locs.values())]
             fig.colorbar(
                 m,
                 ax=used_axes,
                 orientation="horizontal",
                 fraction=0.04,
                 pad=0.04,
+                ticks=ticks,
                 label=var_params["units"],
             )
 

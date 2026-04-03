@@ -3,6 +3,7 @@
 import pandas as pd
 import xarray as xr
 from pathlib import Path
+from typing import Optional
 
 from utils.nmme_io import (
     open_local_forecast,
@@ -10,9 +11,9 @@ from utils.nmme_io import (
 )
 from utils.nmme_normalize import (
     decode_cf_safe,
-    extract_S_scalar,
 #    add_valid_times,
 )
+from utils.nmme_var_names import normalize_forecast_dataset
 
 
 def model_anomalies_for_month(
@@ -22,7 +23,7 @@ def model_anomalies_for_month(
     varname: str,
     levstr: str,
     target: pd.Timestamp,
-) -> xr.Dataset | None:
+) -> Optional[xr.Dataset]:
     """
     Compute anomalies for ONE (model, variable, init month).
 
@@ -44,18 +45,22 @@ def model_anomalies_for_month(
     raw = decode_cf_safe(raw)
 
     # ---------------------------
-    # Extract scalar start time
+    # Use target init month as canonical scalar S
     # ---------------------------
-    S_scalar = extract_S_scalar(raw, fallback=target)
+    # Mixing cftime and pandas timestamp objects across models can break
+    # xarray concat/alignment. We standardize S to the requested init month.
+    S_scalar = pd.Timestamp(target.year, target.month, 1)
 
     # ---------------------------
     # Variable existence check
     # ---------------------------
-    if varname not in raw.data_vars:
+    raw = normalize_forecast_dataset(raw, model, varname)
+    if raw is None or varname not in raw.data_vars:
+        available = [] if raw is None else list(raw.data_vars)
         print(
             f"[MISSING-VAR] model={model} "
             f"init={target:%Y%m} var={varname} "
-            f"available={list(raw.data_vars)}"
+            f"available={available}"
         )
         return None
 
@@ -82,8 +87,23 @@ def model_anomalies_for_month(
     if "S" in fcst_da.dims:
         fcst_da = fcst_da.isel(S=0).drop_vars("S", errors="ignore")
 
-    # Enforce forecast dims
+    # Some model files include singleton metadata axes (e.g., Z, P).
+    # Drop singleton non-forecast dims before validating expected shape.
     expected_fcst_dims = {"M", "L", "Y", "X"}
+    for d in list(fcst_da.dims):
+        if d not in expected_fcst_dims:
+            if fcst_da.sizes.get(d, 0) == 1:
+                fcst_da = fcst_da.isel({d: 0}).squeeze(drop=True)
+            else:
+                print(
+                    f"[INVALID-DIMS] model={model} "
+                    f"init={target:%Y%m} var={varname} "
+                    f"unexpected_dim={d} size={fcst_da.sizes.get(d)} "
+                    f"(skipping)"
+                )
+                return None
+
+    # Enforce forecast dims
     if set(fcst_da.dims) != expected_fcst_dims:
         print(
             f"[INVALID-DIMS] model={model} "
@@ -99,11 +119,20 @@ def model_anomalies_for_month(
     clim_da = clim[varname]
     
     # --- Rename climatology dims to match forecast convention ---
-    clim_da = clim_da.rename({
-        "lon": "X",
-        "lat": "Y",
-        "lead": "L",
-    })
+    rename_map = {}
+    if "lon" in clim_da.dims or "lon" in clim_da.coords:
+        rename_map["lon"] = "X"
+    if "longitude" in clim_da.dims or "longitude" in clim_da.coords:
+        rename_map["longitude"] = "X"
+    if "lat" in clim_da.dims or "lat" in clim_da.coords:
+        rename_map["lat"] = "Y"
+    if "latitude" in clim_da.dims or "latitude" in clim_da.coords:
+        rename_map["latitude"] = "Y"
+    if "lead" in clim_da.dims or "lead" in clim_da.coords:
+        rename_map["lead"] = "L"
+
+    if rename_map:
+        clim_da = clim_da.rename(rename_map)
 
     for d in list(clim_da.dims):
         if d not in ("L", "Y", "X"):
@@ -125,6 +154,13 @@ def model_anomalies_for_month(
     # Restore S as metadata
     # ---------------------------
     da_anom = da_anom.expand_dims(S=[S_scalar])
+
+    # Remove stray scalar coordinates that can differ across models
+    # and break xarray concat (e.g., Z, P, month).
+    keep_coords = {"S", "M", "L", "Y", "X"}
+    extra_coords = [c for c in da_anom.coords if c not in keep_coords]
+    if extra_coords:
+        da_anom = da_anom.drop_vars(extra_coords, errors="ignore")
 
     # ---------------------------
     # Add valid time
