@@ -99,68 +99,23 @@ def hindcast_thresholds_for_model(
     lon_bounds: Tuple[float, float],
     hind_root: Path,
     sfs_hind_root: Path,
+    var: str = "prec_sfc",
 ) -> Tuple[xr.DataArray, xr.DataArray]:
-    model_dir = MODEL_DIR_MAP[model_name]
-    if model_name == "NOAA-SFS":
-        files = sorted(glob.glob(str(sfs_hind_root / "*.nc")))
-        if not files:
-            raise FileNotFoundError(f"No hindcast files for {model_name} under {sfs_hind_root}")
-    else:
-        files = sorted(glob.glob(str(hind_root / model_dir / "*.nc")))
-        if not files:
-            raise FileNotFoundError(f"No hindcast files for {model_name} under {hind_root / model_dir}")
-
-    l0, l1 = SEASON_LEADS[season]
-    sample_arrays = []
-
-    for fp in files:
-        ds = xr.open_dataset(fp, decode_times=False)
-        if "prec" not in ds:
-            ds.close()
-            continue
-
-        da = ds["prec"]
-
-        # Normalize varying hindcast dimension names to the expected convention.
-        ren = {}
-        if "longitude" in da.dims:
-            ren["longitude"] = "lon"
-        if "latitude" in da.dims:
-            ren["latitude"] = "lat"
-        if "L" in da.dims:
-            ren["L"] = "lead"
-        if ren:
-            da = da.rename(ren)
-
-        # Collapse singleton initialization dimensions when present.
-        for init_dim in ("init", "S", "time"):
-            if init_dim in da.dims and da.sizes.get(init_dim, 0) == 1:
-                da = da.isel({init_dim: 0}, drop=True)
-
-        da = to_0360(da)
-        da = subset_region(da, lat_bounds, lon_bounds)
-
-        if "lead" in da.dims:
-            da = da.isel(lead=slice(l0, l1)).mean("lead")
-
-        if "ens" in da.dims:
-            da = da.rename({"ens": "sample"})
-        elif "member" in da.dims:
-            da = da.rename({"member": "sample"})
-        elif "M" in da.dims:
-            da = da.rename({"M": "sample"})
-        else:
-            da = da.expand_dims(sample=[0])
-
-        sample_arrays.append(da.load())
-        ds.close()
-
-    if not sample_arrays:
-        raise RuntimeError(f"No usable hindcast arrays for {model_name}")
-
-    all_samples = xr.concat(sample_arrays, dim="sample")
-    t33 = all_samples.quantile(0.33, dim="sample").drop_vars("quantile", errors="ignore")
-    t66 = all_samples.quantile(0.66, dim="sample").drop_vars("quantile", errors="ignore")
+    # Use precomputed global tercile files
+    # Map variable to canonical name for file
+    var_extract_map = {"prec_sfc": "prec", "tref_2m": "tref", "sst_sfc": "SST"}
+    extract_var = var_extract_map.get(var, var)
+    tercile_dir = Path("/data/esplab/shared/model/initialized/nmme/terciles/1991-2020/")
+    tercile_file = tercile_dir / f"{model_name}.{var}.{season}.terciles.1991-2020.nc"
+    if not tercile_file.exists():
+        raise FileNotFoundError(f"Tercile file not found: {tercile_file}")
+    ds = xr.open_dataset(tercile_file)
+    t33 = ds["t33"]
+    t66 = ds["t66"]
+    # Subset to region
+    t33 = subset_region(t33, lat_bounds, lon_bounds)
+    t66 = subset_region(t66, lat_bounds, lon_bounds)
+    ds.close()
     return t33, t66
 
 
@@ -178,19 +133,36 @@ def compute_region_probabilities(
     nn_model = []
     an_model = []
 
-    for model_name in MODEL_DIR_MAP:
-        if model_name not in ds_fc:
-            print(f"[WARN] Forecast variable missing for {model_name}; skipping")
-            continue
 
-        t33, t66 = hindcast_thresholds_for_model(
-            model_name,
-            season,
-            lat_bounds,
-            lon_bounds,
-            hind_root,
-            sfs_hind_root,
-        )
+    var_map = {"prec": "prec_sfc", "tref": "tref_2m", "sst": "sst_sfc"}
+    for model_name in MODEL_DIR_MAP:
+        # Determine which variable to use based on ds_fc keys
+        # Try to match the model's variable in ds_fc
+        found_var = None
+        for v in var_map:
+            if model_name in ds_fc and v in ds_fc[model_name].name:
+                found_var = var_map[v]
+                break
+        if not found_var:
+            # Fallback: try to infer from ds_fc variable names
+            if model_name in ds_fc:
+                found_var = "prec_sfc"  # Default to prec_sfc if unsure
+            else:
+                print(f"[WARN] Forecast variable missing for {model_name}; skipping")
+                continue
+        try:
+            t33, t66 = hindcast_thresholds_for_model(
+                model_name,
+                season,
+                lat_bounds,
+                lon_bounds,
+                hind_root,
+                sfs_hind_root,
+                var=found_var,
+            )
+        except (FileNotFoundError, RuntimeError) as e:
+            print(f"[WARN] Skipping {model_name}: {e}")
+            continue
 
         fc = to_0360(ds_fc[model_name].isel(L=slice(l0, l1)).mean("L"))
         fc = subset_region(fc, lat_bounds, lon_bounds)
