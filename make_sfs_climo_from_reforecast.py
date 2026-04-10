@@ -1,3 +1,4 @@
+from utils.nmme_io import decode_S_cftime
 #!/usr/bin/env python3
 """
 Build NOAA-SFS monthly variable climatology from local reforecast files.
@@ -28,8 +29,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--input-dir",
-        default="/data/esplab/nmme-backup/NOAA-SFS/reforecast/prec",
-        help="Directory containing <var>_<model>_YYYY_MM.nc files",
+        default=None,
+        help="Directory containing <var>_<model>_YYYY_MM.nc files. If not set, defaults to /data/esplab/nmme-backup/NOAA-SFS/reforecast/<local-var>",
     )
     p.add_argument(
         "--output-file",
@@ -57,7 +58,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    input_dir = Path(args.input_dir)
+    if args.input_dir is not None:
+        input_dir = Path(args.input_dir)
+    else:
+        input_dir = Path(f"/data/esplab/nmme-backup/NOAA-SFS/reforecast/{args.local_var}")
     out_file = Path(args.output_file)
     model = str(args.model)
     local_var = str(args.local_var)
@@ -75,9 +79,17 @@ def main() -> int:
             f"No matching files found in {input_dir} for pattern {pattern}"
         )
 
+
+    print("[DEBUG] Loading the following files:")
     datasets = []
     for f in files:
-        ds_i = xr.open_dataset(f, decode_times=True, use_cftime=True)
+        print(f"  {f}")
+        ds_i = xr.open_dataset(f, decode_times=True)
+        # Print the 'init' coordinate if present
+        if 'init' in ds_i.coords:
+            print(f"    init: {ds_i['init'].values}")
+        else:
+            print("    [WARN] 'init' coordinate not found in file")
         datasets.append(ds_i)
 
     ds = xr.concat(datasets, dim="init")

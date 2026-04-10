@@ -55,6 +55,14 @@ set_var_defaults() {
                 REMOTE_VAR="${REMOTE_VAR:-SST}"
                 ZARR_DATASET="${ZARR_DATASET:-ocn_monthly.zarr}"
                 ;;
+            h200)
+                REMOTE_VAR="${REMOTE_VAR:-z200}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            h500)
+                REMOTE_VAR="${REMOTE_VAR:-z500}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
             *)
                 REMOTE_VAR="${REMOTE_VAR:-$LOCAL_VAR}"
                 ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"

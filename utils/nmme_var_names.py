@@ -16,6 +16,13 @@ def _ordered_unique(values: Iterable[str]) -> Tuple[str, ...]:
 def forecast_storage_var_candidates(model: str, var: str) -> Tuple[str, ...]:
     candidates = [var]
 
+    # SFS: z200/z500 are aliases for h200/h500
+    if model == "NOAA-SFS":
+        if var == "h200":
+            candidates.append("z200")
+        if var == "h500":
+            candidates.append("z500")
+
     if var == "h200" and model in {"COLA-RSMAS-CCSM4", "COLA-RSMAS-CESM1"}:
         candidates.append("gz")
 
@@ -30,6 +37,13 @@ def forecast_storage_var_candidates(model: str, var: str) -> Tuple[str, ...]:
 
 def forecast_dataset_var_candidates(model: str, var: str) -> Tuple[str, ...]:
     candidates = [var]
+
+    # SFS: z200/z500 are aliases for h200/h500
+    if model == "NOAA-SFS":
+        if var == "h200":
+            candidates.append("z200")
+        if var == "h500":
+            candidates.append("z500")
 
     if var == "sst" and model == "GFDL-SPEAR":
         candidates.append("sst_regridded")

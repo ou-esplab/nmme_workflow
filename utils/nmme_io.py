@@ -81,7 +81,13 @@ def open_monthly_climatology(
     Open climatology file and select appropriate month.
     """
 
-    fpath = clim_root / f"{model}.{var}_{lev}.clim.1991-2020.nc"
+    # Only add underscore if lev is not empty
+    if lev:
+        fpath = clim_root / f"{model}.{var}_{lev}.clim.1991-2020.nc"
+    else:
+        fpath = clim_root / f"{model}.{var}.clim.1991-2020.nc"
+    print(f"[DEBUG] Trying to open climatology file: {fpath}")
+    print(f"[DEBUG] Trying to open climatology file: {fpath}")
 
     if not fpath.exists():
         return None

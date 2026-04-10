@@ -71,7 +71,23 @@ def model_anomalies_for_month(
         clim_root, model, varname, levstr, raw, target
     )
 
+    # Special handling for partial climatology (e.g., NOAA-SFS only has some months)
     if clim is None or varname not in clim.data_vars:
+        # Check if the file exists but the month is missing
+        clim_file = (Path(clim_root) / f"{model}.{varname}_{levstr}.clim.1991-2020.nc")
+        if clim_file.exists():
+            try:
+                import xarray as xr
+                ds = xr.open_dataset(clim_file)
+                if "month" in ds:
+                    available_months = set(int(m) for m in ds["month"].values.tolist())
+                    if int(target.month) not in available_months:
+                        print(
+                            f"[SKIP-CLIM] model={model} init={target:%Y%m} var={varname} (month {target.month} not in file)"
+                        )
+                        return None
+            except Exception as e:
+                print(f"[ERROR] Could not check months in {clim_file}: {e}")
         print(
             f"[MISSING-CLIM] model={model} "
             f"init={target:%Y%m} var={varname}"

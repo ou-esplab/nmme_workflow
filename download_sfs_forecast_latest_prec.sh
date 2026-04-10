@@ -20,6 +20,7 @@ S3_ZARR_URL="${S3_ZARR_URL:-}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-0}"
 
+# Always set OUTDIR based on LOCAL_VAR (no fallback to 'prec')
 OUTDIR="${DATA_ROOT}/${MODEL}/${TYPE}/${LOCAL_VAR}"
 MANIFEST=""
 
@@ -55,6 +56,14 @@ set_var_defaults() {
                 REMOTE_VAR="${REMOTE_VAR:-SST}"
                 ZARR_DATASET="${ZARR_DATASET:-ocn_monthly.zarr}"
                 ;;
+            h200)
+                REMOTE_VAR="${REMOTE_VAR:-z200}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            h500)
+                REMOTE_VAR="${REMOTE_VAR:-z500}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
             *)
                 REMOTE_VAR="${REMOTE_VAR:-$LOCAL_VAR}"
                 ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
@@ -64,13 +73,14 @@ set_var_defaults() {
 }
 
 main() {
+    echo "DEBUG: OUTDIR=$OUTDIR LOCAL_VAR=$LOCAL_VAR REMOTE_VAR=$REMOTE_VAR ZARR_DATASET=$ZARR_DATASET"
   command -v python3 >/dev/null 2>&1 || {
     echo "ERROR: python3 not found" >&2
     exit 1
   }
 
     set_var_defaults
-    MANIFEST="${OUTDIR}/manifest_${REMOTE_VAR}_latest_nc.txt"
+  MANIFEST="${OUTDIR}/manifest_${REMOTE_VAR}_latest_nc.txt"
   check_python_deps
   mkdir -p "$OUTDIR"
 
@@ -132,14 +142,17 @@ PY
     )"
     log "DRY_RUN: latest forecast init metadata"
     echo "$py_out"
-    return 0
-  fi
 
-    py_out="$(python3 - "$S3_FORECAST_ROOT" "$SFS_CYCLE" "$S3_ZARR_URL" "$REMOTE_VAR" "$ZARR_DATASET" "$LOCAL_VAR" "$OUTDIR" "$MODEL" "$FORCE_OVERWRITE" <<'PY'
+        return 0
+    fi
+
+  py_out="$(python3 - "$S3_FORECAST_ROOT" "$SFS_CYCLE" "$S3_ZARR_URL" "$REMOTE_VAR" "$ZARR_DATASET" "$LOCAL_VAR" "$OUTDIR" "$MODEL" "$FORCE_OVERWRITE" <<'PY'
+
 import os
 import sys
 import s3fs
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 s3_root, cycle, zarr_url_override, remote_var, zarr_dataset, local_var, outdir, model, force_overwrite = sys.argv[1:]
@@ -187,6 +200,8 @@ y = cycle_used[0:4]
 m = cycle_used[4:6]
 init_day = f"{y}-{m}-01"
 
+# Ensure output directory exists
+os.makedirs(outdir, exist_ok=True)
 outfile = os.path.join(outdir, f"{local_var}_{model}_{y}_{m}.nc")
 if os.path.exists(outfile) and not force_overwrite:
     print(f"OUTFILE={outfile}")
@@ -204,7 +219,7 @@ if local_var == "prec":
 
 # Ensure an init-like axis exists for downstream compatibility.
 if "init" not in da.dims and "S" not in da.dims:
-    da = da.expand_dims(init=[np.datetime64(init_day)])
+    da = da.expand_dims(init=[pd.Timestamp(init_day)])
 
 out = da.to_dataset(name=local_var)
 tmpfile = outfile + ".part"
