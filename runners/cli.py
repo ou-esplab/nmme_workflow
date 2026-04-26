@@ -13,10 +13,10 @@ def run_cmd(cmd_list, log_path):
     with open(log_path, "wb") as logf:
         proc = subprocess.Popen(cmd_list, stdout=logf, stderr=logf)
         code = proc.wait()
-    if code != 0:
-        raise RuntimeError(
-            f"Command failed ({code}): {' '.join(cmd_list)}; see {log_path}"
-        )
+        if code != 0:
+            raise RuntimeError(
+                f"Command failed ({code}): {' '.join(cmd_list)}; see {log_path}"
+            )
 
 
 def main() -> int:
@@ -28,7 +28,7 @@ def main() -> int:
     p.add_argument(
         "--stages",
         nargs="+",
-        default=["ingest", "products", "pycpt"],
+        default=["ingest", "preprocess", "products", "pycpt"],
         help="Stages to run in order",
     )
     p.add_argument(
@@ -36,7 +36,7 @@ def main() -> int:
         help="Init date: NMME=YYYYMM (or YYYYMMDD), SubX=YYYYMMDD",
     )
 
-    # ---------- NEW FLAGS ----------
+    # ---------- Products flags ----------
     p.add_argument(
         "--products-direct",
         action="store_true",
@@ -47,9 +47,8 @@ def main() -> int:
         action="store_true",
         help="Run products stage without writing plots or NetCDF output",
     )
-    # -------------------------------
 
-    # PyCPT passthrough flags (unchanged)
+    # ---------- PyCPT passthrough flags ----------
     p.add_argument("--pycpt-env-name", default="pycpt-2.8.2")
     p.add_argument("--pycpt-conda-init", default=None)
     p.add_argument("--pycpt-use-mamba", action="store_true")
@@ -78,125 +77,152 @@ def main() -> int:
     def tercile_file_exists_and_not_all_nan(path):
         import xarray as xr
         from pathlib import Path
+
         if not Path(path).exists():
             return False
         try:
             ds = xr.open_dataset(path)
-            # Check if all values in t33 and t66 are NaN
-            all_nan = ds['t33'].isnull().all() and ds['t66'].isnull().all()
+            all_nan = ds["t33"].isnull().all() and ds["t66"].isnull().all()
             ds.close()
             return not all_nan
         except Exception:
             return False
 
+    # ---------- Special bootstrap stage (unchanged) ----------
     if args.system == "nmme":
         if "precompute_terciles" in args.stages:
             import yaml
+
             with open(args.config, "r") as f:
                 cfg = yaml.safe_load(f)
+
             models = cfg.get("models", [])
             outdir = Path("tercile_thresholds")
             outdir.mkdir(exist_ok=True)
-            hindcast_root = "/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full"  # Adjust as needed
-            sfs_hindcast_root = "/data/esplab/nmme-backup/NOAA-SFS/reforecast"  # Adjust as needed
-            from make_tercile_probability_maps import SEASON_LEADS, MODEL_DIR_MAP
+
+            hindcast_root = "/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full"
+            sfs_hindcast_root = "/data/esplab/nmme-backup/NOAA-SFS/reforecast"
+
+            from make_tercile_probability_maps import SEASON_LEADS
+
             vars = ["prec", "tref", "sst"]
+
             for model in models:
                 for var in vars:
                     for season in SEASON_LEADS.keys():
                         tercile_path = outdir / f"{model}.{var}.{season}.terciles.1991-2020.nc"
                         if not tercile_file_exists_and_not_all_nan(tercile_path):
-                            # Build command to run precompute_tercile_thresholds.py for this model/var/season
                             cmd = [
-                                "python", "precompute_tercile_thresholds.py",
-                                f"--config", args.config,
-                                f"--hindcast-root", hindcast_root,
-                                f"--sfs-hindcast-root", sfs_hindcast_root,
-                                f"--outdir", str(outdir)
+                                "python",
+                                "precompute_tercile_thresholds.py",
+                                "--config",
+                                args.config,
+                                "--hindcast-root",
+                                hindcast_root,
+                                "--sfs-hindcast-root",
+                                sfs_hindcast_root,
+                                "--outdir",
+                                str(outdir),
                             ]
-                            # Only run for this model/var/season if needed
-                            log_path = logdir / f"precompute_terciles_{model}_{var}_{season}.log"
+                            log_path = logdir / f"precompute_terciles_{model}{var}{season}.log"
                             print(f"[RUN] precompute_terciles: {' '.join(cmd)} -> {log_path}")
                             run_cmd(cmd, str(log_path))
                         else:
                             print(f"[SKIP] Tercile file exists and is valid: {tercile_path}")
 
-        if "ingest" in args.stages:
-            cfg_q = shlex.quote(args.config)
-            init_q = shlex.quote(init_str)
-            stage_cmds["ingest"] = [
-                "bash",
-                "-lc",
-                f"NMME_CONFIG={cfg_q} INIT_YYYYMM={init_q} ./nmme_update_fcsts.sh",
+    # ---------- Ingest ----------
+    if "ingest" in args.stages:
+        cfg_q = shlex.quote(args.config)
+        init_q = shlex.quote(init_str)
+        stage_cmds["ingest"] = [
+            "bash",
+            "-lc",
+            f"NMME_CONFIG={cfg_q} INIT_YYYYMM={init_q} ingest/nmme_update_fcsts.sh",
+        ]
+
+    # ---------- Preprocess (new, thin by design) ----------
+    if "preprocess" in args.stages:
+        stage_cmds["preprocess"] = [
+            "python",
+            "preprocess/run_preprocess.py",
+            "--system",
+            args.system,
+            "--config",
+            args.config,
+            "--init",
+            init_str,
+        ]
+
+    # ---------- Products ----------
+    if "products" in args.stages:
+        if args.products_direct:
+            cmd1 = [
+                "python",
+                "products/MakeNMMEFcsts.py",
+                "--date",
+                init_str,
+                "--config",
+                args.config,
+            ]
+            if args.products_dry_run:
+                cmd1.append("--dry-run")
+
+            cmd2 = [
+                "python",
+                "products/make_tercile_probability_maps.py",
+                "--init",
+                init_str,
+                "--config",
+                args.config,
             ]
 
-        if "products" in args.stages:
-            if args.products_direct:
-                cmd1 = [
+            stage_cmds["products"] = [cmd1, cmd2]
+        else:
+            suffix = " --dry-run" if args.products_dry_run else ""
+            stage_cmds["products"] = [
+                ["bash", "-lc", f"products/makefcsts.sh {init_str}{suffix}"],
+                [
                     "python",
-                    "MakeNMMEFcsts.py",
-                    "--date",
-                    init_str,
-                    "--config",
-                    args.config,
-                ]
-                if args.products_dry_run:
-                    cmd1.append("--dry-run")
-                cmd2 = [
-                    "python",
-                    "make_tercile_probability_maps.py",
+                    "products/make_tercile_probability_maps.py",
                     "--init",
                     init_str,
                     "--config",
                     args.config,
-                ]
-                # Optionally add --seasons, --outdir, --regions if needed
-                stage_cmds["products"] = [cmd1, cmd2]
-            else:
-                suffix = " --dry-run" if args.products_dry_run else ""
-                # If using shell script, just append the tercile map script after
-                stage_cmds["products"] = [
-                    ["bash", "-lc", f"./makefcsts.sh {init_str}{suffix}"],
-                    [
-                        "python",
-                        "make_tercile_probability_maps.py",
-                        "--init",
-                        init_str,
-                        "--config",
-                        args.config,
-                    ]
-                ]
-
-        if "pycpt" in args.stages:
-            cmd = [
-                "./run_pycpt_from_yaml.py",
-                args.config,
-                init_str,
+                ],
             ]
-            if args.pycpt_only:
-                cmd += ["--only", *args.pycpt_only]
-            if args.pycpt_dry_run:
-                cmd.append("--dry-run")
-            if args.pycpt_max_workers and args.pycpt_max_workers > 1:
-                cmd += ["--max-workers", str(args.pycpt_max_workers)]
-            if args.pycpt_env_name:
-                cmd += ["--env-name", args.pycpt_env_name]
-            if args.pycpt_conda_init:
-                cmd += ["--conda-init", args.pycpt_conda_init]
-            if args.pycpt_use_mamba:
-                cmd.append("--use-mamba")
 
-            stage_cmds["pycpt"] = cmd
+    # ---------- PyCPT ----------
+    if "pycpt" in args.stages:
+        cmd = [
+            "python",
+            "postprocess/run_pycpt_from_yaml.py",
+            args.config,
+            init_str,
+        ]
+        if args.pycpt_only:
+            cmd += ["--only", *args.pycpt_only]
+        if args.pycpt_dry_run:
+            cmd.append("--dry-run")
+        if args.pycpt_max_workers > 1:
+            cmd += ["--max-workers", str(args.pycpt_max_workers)]
+        if args.pycpt_env_name:
+            cmd += ["--env-name", args.pycpt_env_name]
+        if args.pycpt_conda_init:
+            cmd += ["--conda-init", args.pycpt_conda_init]
+        if args.pycpt_use_mamba:
+            cmd.append("--use-mamba")
+
+        stage_cmds["pycpt"] = cmd
 
     # ---------------- Execute ----------------
     for i, stage in enumerate(args.stages, start=1):
         if stage not in stage_cmds:
             continue
+
         cmds = stage_cmds[stage]
         if isinstance(cmds[0], list):
-            # Multiple commands for this stage
             for j, cmd in enumerate(cmds, start=1):
-                log_path = logdir / f"{i:02d}_{stage}_{j}.log"
+                log_path = logdir / f"{i:02d}{stage}{j}.log"
                 print(f"[RUN] {stage} (step {j}): {' '.join(cmd)} -> {log_path}")
                 run_cmd(cmd, str(log_path))
         else:
@@ -208,4 +234,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

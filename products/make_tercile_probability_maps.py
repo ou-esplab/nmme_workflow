@@ -19,6 +19,12 @@ import xarray as xr
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
+
+# Ensure project root is in sys.path for module imports
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 from utils.config import load_config
 
 # Model names in forecast output -> hindcast directory names.
@@ -81,15 +87,17 @@ def subset_region(da: xr.DataArray, lat_bounds: Tuple[float, float], lon_bounds:
 
 
 def load_forecast(init_yyyymm: str, out_root: Path) -> xr.Dataset:
-    fpath = (
-        out_root
-        / init_yyyymm
-        / "data"
-        / f"NMME_fcst_{init_yyyymm}.anom.monthly.prec_sfc.emean.nc"
-    )
-    if not fpath.exists():
-        raise FileNotFoundError(f"Forecast file not found: {fpath}")
-    return xr.open_dataset(fpath)
+    def _load(var):
+        fpath = (
+            out_root
+            / init_yyyymm
+            / "data"
+            / f"NMME_fcst_{init_yyyymm}.anom.monthly.{var}.emean.nc"
+        )
+        if not fpath.exists():
+            raise FileNotFoundError(f"Forecast file not found: {fpath}")
+        return xr.open_dataset(fpath)
+    return {var: _load(var) for var in ["prec", "tref", "sst"]}
 
 
 def hindcast_thresholds_for_model(
@@ -164,7 +172,12 @@ def compute_region_probabilities(
             print(f"[WARN] Skipping {model_name}: {e}")
             continue
 
-        fc = to_0360(ds_fc[model_name].isel(L=slice(l0, l1)).mean("L"))
+        # Only allow 'lead' dimension
+        da = ds_fc[model_name]
+        if 'lead' in da.dims:
+            fc = to_0360(da.isel(lead=slice(l0, l1)).mean("lead"))
+        else:
+            raise ValueError(f"'lead' dimension not found in {model_name} data array (dims={da.dims})")
         fc = subset_region(fc, lat_bounds, lon_bounds)
 
         bn = (fc < t33).astype(float) * 100.0
@@ -263,7 +276,7 @@ def main() -> int:
     else:
         outdir = out_root / args.init / "images" / "tercile_probs"
 
-    ds_fc = load_forecast(args.init, out_root)
+    ds_fc_dict = load_forecast(args.init, out_root)
     regions = cfg.get("pycpt_regions", [])
     if not regions:
         raise ValueError("No pycpt_regions in config")
@@ -274,25 +287,37 @@ def main() -> int:
         if not regions:
             raise ValueError(f"No matching regions for --regions={args.regions}")
 
-    for reg in regions:
-        rname = reg["name"]
-        lat_bounds = tuple(reg["lat"])
-        lon_bounds = tuple(reg["lon"])
+    # Write outputs to the seasonal directory instead of monthly
+    seasonal_root = Path("/data/esplab/shared/model/initialized/nmme/forecast/seasonal")
+    tercile_outdir = seasonal_root / args.init / "data" / "terciles"
+    tercile_outdir.mkdir(parents=True, exist_ok=True)
 
-        for season in seasons:
-            print(f"[INFO] Computing {rname} {season}")
-            lead_label = build_target_label(args.init, season)
-            prob = compute_region_probabilities(
-                ds_fc,
-                season,
-                lat_bounds,
-                lon_bounds,
-                hind_root,
-                sfs_hind_root,
-            )
-            out_png = outdir / rname / f"NMME_{args.init}_{rname}_{season}_tercile_probs.png"
-            plot_probabilities(prob, rname, season, args.init, lead_label, out_png)
-            print(f"[INFO] Wrote {out_png}")
+    for var, ds_fc in ds_fc_dict.items():
+        for reg in regions:
+            rname = reg["name"]
+            lat_bounds = tuple(reg["lat"])
+            lon_bounds = tuple(reg["lon"])
+
+            for season in seasons:
+                print(f"[INFO] Computing {rname} {season} {var}")
+                lead_label = build_target_label(args.init, season)
+                prob = compute_region_probabilities(
+                    ds_fc,
+                    season,
+                    lat_bounds,
+                    lon_bounds,
+                    hind_root,
+                    sfs_hind_root,
+                )
+                # Write tercile probabilities to NetCDF
+                out_nc = tercile_outdir / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"
+                xr.Dataset(prob).to_netcdf(out_nc)
+                print(f"[INFO] Wrote {out_nc}")
+                # Optionally, plot for each variable as before
+                out_png = seasonal_root / args.init / "images" / "tercile_probs" / rname / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.png"
+                out_png.parent.mkdir(parents=True, exist_ok=True)
+                plot_probabilities(prob, rname, season, args.init, lead_label, out_png)
+                print(f"[INFO] Wrote {out_png}")
 
     return 0
 

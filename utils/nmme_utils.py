@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 # coding: utf-8
+from __future__ import annotations
+#!/usr/bin/env python3
+# coding: utf-8
 """
 nmme_utils.py
 -------------
 NMME pipeline utilities: config loading, date scanning, subprocess execution,
 logging/locking helpers, and thin stage runners used by the shell pipeline.
 """
-from __future__ import annotations
+"""
+nmme_utils.py
+-------------
+NMME pipeline utilities: config loading, date scanning, subprocess execution,
+logging/locking helpers, and thin stage runners used by the shell pipeline.
+"""
 from typing import Optional, Dict, Any
 import os, glob, subprocess, yaml
 
@@ -80,3 +88,22 @@ def run_pycpt(script_path: str, fcstdate: str,
         f"--training_season {season}"
     )
     run_cmd(cmd, log)
+
+import pandas as pd
+
+# ...existing code...
+
+def decode_cf_safe(ds: xr.Dataset) -> xr.Dataset:
+    """Decode CF times without throwing."""
+    try:
+        return xr.decode_cf(ds)
+    except Exception:
+        return ds
+
+# ---- Add valid_times utility ----
+def add_valid_times(ds: xr.Dataset, S_ts) -> xr.Dataset:
+    """Add a 'valid' coordinate = S_ts + lead months (if both exist)."""
+    if "lead" not in ds.dims:
+        return ds
+    valid_list = [S_ts + pd.DateOffset(months=int(l)) for l in ds["lead"].values]
+    return ds.assign_coords(valid=("lead", valid_list))

@@ -125,13 +125,6 @@ def fix_lead_coord(ds: xr.Dataset) -> xr.Dataset:
             pass
     return ds
 
-def add_valid_times(ds: xr.Dataset) -> xr.Dataset:
-    """Add a 'valid' coordinate = S + lead months (if both exist)."""
-    if "lead" not in ds.dims or "S" not in ds.coords:
-        return ds
-    S0 = _to_scalar_timestamp(ds["S"].values, pd.Timestamp("2000-01-01"))
-    valid_list = [S0 + pd.DateOffset(months=int(l)) for l in ds["lead"].values]
-    return ds.assign_coords(valid=("lead", valid_list))
 
 def get_start_month(ds: xr.Dataset, start_time: pd.Timestamp) -> int:
     """Return forecast start month, preferring 'S' if present."""
@@ -220,32 +213,14 @@ def model_anomalies_for_month(data_root: Path, clim_root: Path,
     Load one model/variable for a YYYYMM init, subtract matching monthly climatology,
     return a one-variable dataset with normalized dims and coords.
     """
+
+    from utils.nmme_normalize import normalize_forecast_dataset
     raw = open_local_file(data_root, model, varname, target.year, target.month)
     if raw is None:
         return None
-    try:
-        raw = decode_cf(raw, "S")
-    except Exception:
-        pass
-    raw = select_yyyymm_lenient(raw, target, target.year, target.month)
-    if raw is None:
-        return None
-    raw = ensure_start_coord(raw, target)
-    raw = standardize_dims(raw)
-    raw = fix_lead_coord(raw)
-
-    dv = pick_internal_var_name(model, varname, raw)
-    if model == "GFDL-SPEAR" and dv == "sst_regridded":
-        raw = raw.rename({"sst_regridded": "sst"})
-        dv = "sst"
-    if "Z" in raw.dims and raw.sizes.get("Z", 1) == 1:
-        raw = raw.squeeze("Z", drop=True)
-    if dv != varname:
-        if dv in raw.data_vars:
-            raw = raw.rename({dv: varname})
-        else:
-            return None
-    if varname not in raw.data_vars:
+    # Use the canonical normalization function
+    raw = normalize_forecast_dataset(raw, model, varname)
+    if raw is None or varname not in raw.data_vars:
         return None
 
     clim_file = clim_root / f"{model}.{varname}_{levstr}.clim.1991-2020.nc"

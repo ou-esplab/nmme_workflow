@@ -1,28 +1,36 @@
 # utils/nmme_mme.py
 
+from xml.parsers.expat import model
+
 import xarray as xr
 import pandas as pd
 from pathlib import Path
 
 from utils.nmme_metadata import init_models
 from utils.nmme_anomalies import model_anomalies_for_month
-from utils.nmme_normalize import add_valid_times
 
 
 def build_mme_for_month(
     data_root: Path,
     clim_root: Path,
-    target: pd.Timestamp,
+    init_yyyymm: str,
 ) -> xr.Dataset:
     """
-    Build per-model anomalies and the MME for one init month.
-    Retains ensemble members and per-model ensemble means.
+    Build per-model anomalies and the MME for one initialization month.
+
+    Rules:
+      - Operates on preprocessed data (init already selected)
+      - Uses valid(L) everywhere; never computes time
+      - Skips missing models/variables
+      - Aborts only if NO data is produced at all
     """
 
     models, _, _, _ = init_models()
 
     per_model = []
     model_names = []
+
+    any_data = False  # <-- global success flag
 
     # --------------------------------------------------
     # Loop over models
@@ -44,64 +52,42 @@ def build_mme_for_month(
                 model=model,
                 varname=var,
                 levstr=lev,
-                target=target,
+                init_yyyymm=init_yyyymm,
+            )
+
+            print(
+                f"[DEBUG] model={model} var={var} "
+                f"-> ds_var={'OK' if ds_var is not None else 'None'}"
             )
 
             if ds_var is None:
                 continue
 
-            # ✅ Per-model ensemble mean (variable-level)
-            if "M" in ds_var.dims:
-                ds_var[f"{var}_ensmean"] = ds_var[var].mean("M", skipna=True)
+            # Per-model ensemble mean (variable-level)
+            if "member" in ds_var.dims:
+                ds_var[f"{var}_ensmean"] = ds_var[var].mean("member", skipna=True)
                 ds_var[f"{var}_ensmean"].attrs["description"] = (
                     "Per-model ensemble mean"
                 )
 
             var_datasets.append(ds_var)
+            any_data = True  # <-- mark success
 
         # Skip model if no variables succeeded
         if not var_datasets:
-            continue
-
-        # -------------------------------
-        # Normalize variable grids within this model
-        # -------------------------------
-        # Some models (e.g., NOAA-SFS) can provide variables on different
-        # native grids across variables. Interpolate all successful variables
-        # to the coarsest available Y/X grid for stable merging.
-        yx_candidates = [
-            i for i, ds_i in enumerate(var_datasets)
-            if "Y" in ds_i.sizes and "X" in ds_i.sizes
-        ]
-        if yx_candidates:
-            target_idx = min(
-                yx_candidates,
-                key=lambda i: var_datasets[i].sizes["Y"] * var_datasets[i].sizes["X"],
+            print(
+                f"[WARN] No variables contributed for model={model}; skipping model"
             )
-            target_Y = var_datasets[target_idx]["Y"].values
-            target_X = var_datasets[target_idx]["X"].values
-
-            normalized_vars = []
-            for ds_i in var_datasets:
-                if (
-                    "Y" in ds_i.sizes and "X" in ds_i.sizes
-                    and (
-                        ds_i.sizes["Y"] != len(target_Y)
-                        or ds_i.sizes["X"] != len(target_X)
-                    )
-                ):
-                    ds_i = ds_i.interp(Y=target_Y, X=target_X, method="linear")
-                normalized_vars.append(ds_i)
-            var_datasets = normalized_vars
+            continue
 
         # -------------------------------
         # Merge variables for this model
         # -------------------------------
         ds_model = xr.merge(var_datasets, compat="override")
 
-        # ✅ Ensemble count ONCE per model
-        if "M" in ds_model.dims:
-            ds_model["nens"] = ds_model["M"].count("M")
+        # Ensemble count ONCE per model
+        if "member" in ds_model.dims:
+            ds_model["nens"] = ds_model["member"].count("member")
             ds_model["nens"].attrs["description"] = (
                 "Number of ensemble members contributing"
             )
@@ -109,25 +95,13 @@ def build_mme_for_month(
         per_model.append(ds_model)
         model_names.append(model)
 
-    if not per_model:
+    # --------------------------------------------------
+    # FINAL ABORT CHECK (ONLY PLACE IT BELONGS)
+    # --------------------------------------------------
+    if not any_data:
         raise RuntimeError(
-            f"No valid NMME data available for {target:%Y%m}"
+            f"No valid NMME data available for init {init_yyyymm}"
         )
-
-    # --------------------------------------------------
-    # Normalize grids: regrid models with different Y/X
-    # resolution to match the first model's grid.
-    # (e.g., NOAA-SFS is 0.5° while other NMME models
-    # are 1°; linear interpolation downsamples to 1°.)
-    # --------------------------------------------------
-    ref_Y = per_model[0]["Y"].values
-    ref_X = per_model[0]["X"].values
-    normalized = []
-    for ds in per_model:
-        if ds.sizes["Y"] != len(ref_Y) or ds.sizes["X"] != len(ref_X):
-            ds = ds.interp(Y=ref_Y, X=ref_X, method="linear")
-        normalized.append(ds)
-    per_model = normalized
 
     # --------------------------------------------------
     # Combine models
@@ -137,39 +111,29 @@ def build_mme_for_month(
         dim=xr.IndexVariable("model", model_names),
     )
 
-    # --------------------------------------------------
-    # Derive valid time ONCE globally
-    # --------------------------------------------------
-    S_cf = ds_models["S"].values[0]
-    if hasattr(S_cf, "year") and hasattr(S_cf, "month"):
-        S_ts = pd.Timestamp(S_cf.year, S_cf.month, 1)
+    # --- Compute and append MME (multi-model ensemble mean) ---
+    mme_vars = {}
+    for var in ds_models.data_vars:
+        if var.endswith("_ensmean"):
+            # Take mean across model dimension, skipna for robustness
+            mme_vars[var] = ds_models[var].mean(dim="model", skipna=True)
+    if mme_vars:
+        mme_ds = xr.Dataset({k: v.expand_dims("model") for k, v in mme_vars.items()})
+        mme_ds = mme_ds.assign_coords(model=(["model"], ["MME"]))
+        # Copy over coordinates and attrs from ds_models
+        for coord in ds_models.coords:
+            if coord not in mme_ds.coords:
+                mme_ds = mme_ds.assign_coords({coord: ds_models[coord]})
+        mme_ds.attrs["init_yyyymm"] = init_yyyymm
+        # Concatenate MME to the original models
+        ds_models = xr.concat([ds_models, mme_ds], dim="model")
+
+    ds_models.attrs["init_yyyymm"] = init_yyyymm
+
+    # Diagnostic: check if NOAA-SFS is missing
+    if "NOAA-SFS" not in ds_models["model"].values:
+        print(f"[DIAG] WARNING: NOAA-SFS is missing from the final dataset for init {init_yyyymm}")
     else:
-        S_parsed = pd.to_datetime(S_cf)
-        S_ts = pd.Timestamp(S_parsed.year, S_parsed.month, 1)
-    ds_models = add_valid_times(ds_models, S_ts)
+        print(f"[DIAG] NOAA-SFS is present in the final dataset for init {init_yyyymm}")
 
-    # --------------------------------------------------
-    # Compute MME from ensemble means ONLY
-    # --------------------------------------------------
-    ensmean_vars = [v for v in ds_models.data_vars if v.endswith("_ensmean")]
-
-    ds_mme = ds_models[ensmean_vars].mean(
-        "model", skipna=True, keep_attrs=True
-    )
-    ds_mme = ds_mme.assign_coords(model="MME")
-    
-    # Compute total ensemble count for MME as sum across models
-    mme_nens = ds_models["nens"].sum("model", skipna=True)
-
-    ds_mme["nens"] = mme_nens
-    ds_mme["nens"].attrs["description"] = (
-        "Total number of ensemble members contributing to MME"
-    )
-
-    # --------------------------------------------------
-    # Final concat: models + MME
-    # --------------------------------------------------
-    return xr.concat(
-        [ds_models, ds_mme],
-        dim="model",
-    )
+    return ds_models

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import xarray as xr
 
-from utils.nmme_var_names import normalize_forecast_dataset
+from utils.nmme_normalize import normalize_forecast_dataset
 
 
 HEIGHT_ALIASES = {"gz", "hgt", "zg"}

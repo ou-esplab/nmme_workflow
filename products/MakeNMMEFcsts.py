@@ -57,9 +57,18 @@ def main() -> int:
         print("[ERROR] --date must be YYYYMM (e.g., 202603)", file=sys.stderr)
         return 2
 
+    # ✅ DEFINE fcst_yyyymm FIRST
+    fcst_yyyymm = fcstdate.strftime("%Y%m")
+
     cfg = load_config(args.config)
 
-    data_root = Path(cfg["data"]["local"]["root"])
+    # ✅ NOW SAFE TO USE
+    data_root = (
+        Path(cfg["data"]["local"].get("preprocess_root"))
+        / fcst_yyyymm
+        / "preprocess"
+    )
+
     clim_root = Path(
         cfg["data"]["local"].get(
             "climatology",
@@ -85,7 +94,7 @@ def main() -> int:
     ds_fcst = build_mme_for_month(
         data_root=data_root,
         clim_root=clim_root,
-        target=pd.Timestamp(fcstdate),
+        init_yyyymm=fcst_yyyymm
     )
 
     if args.dry_run:
@@ -94,6 +103,7 @@ def main() -> int:
         print(ds_fcst)
     else:
         nmme_plot(ds_fcst, figpath)
+        assert "valid" in ds_fcst.coords, ds_fcst.coords
         nmme_write(ds_fcst, fcst_yyyymm)
         print(f"[INFO] Products written for {fcst_yyyymm}")
 

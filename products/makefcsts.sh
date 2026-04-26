@@ -18,8 +18,8 @@ CONFIG="confignmme.yaml"
 . /home/kpegion/miniconda3/etc/profile.d/conda.sh
 conda activate subxnmme
 
-# Delegate to Python
-python MakeNMMEFcsts.py \
+export PYTHONPATH=$(pwd)
+python products/MakeNMMEFcsts.py \
     --date "${FCSTDATE}" \
     --config "${CONFIG}" \
     "${EXTRA_ARGS[@]}"

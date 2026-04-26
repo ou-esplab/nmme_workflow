@@ -4,70 +4,42 @@ from pathlib import Path
 from typing import Optional
 import xarray as xr
 import pandas as pd
+import cftime
+import numpy as np
 
-from utils.nmme_var_names import (
+
+from utils.nmme_normalize import (
     forecast_storage_var_candidates,
     normalize_forecast_dataset,
 )
-
 
 def open_local_forecast(
     root: Path,
     model: str,
     var: str,
-    time: pd.Timestamp,
+    init_yyyymm: str,
 ) -> Optional[xr.Dataset]:
+    """
+    Open a preprocessed forecast file for one model/variable/init.
+    """
 
-    fpath = None
-    for storage_var in forecast_storage_var_candidates(model, var):
-        candidate = (
-            root
-            / model
-            / "forecast"
-            / storage_var
-            / f"{storage_var}_{model}_{time.year}_{time.month:02d}.nc"
-        )
-        if candidate.exists():
-            fpath = candidate
-            break
+    year = init_yyyymm[:4]
+    month = init_yyyymm[4:6]
 
-    if fpath is None:
+    fpath = (
+        Path(root)
+        / model
+        / "forecast"
+        / var
+        / f"{var}_{model}_{year}_{month}.nc"
+    )
+
+    print(f"[DEBUG] looking for forecast file: {fpath}")
+
+    if not fpath.exists():
         return None
 
-    # Open WITHOUT CF decoding
-    ds = xr.open_dataset(fpath, decode_times=False)
-
-    # Decode only S safely
-    ds = decode_S_cftime(ds)
-
-    # Normalize external forecast files (e.g., NOAA-SFS) into workflow dims.
-    # Expected downstream dims are S, M, L, Y, X.
-    rename_map = {}
-    if "init" in ds.dims or "init" in ds.coords:
-        rename_map["init"] = "S"
-    if "member" in ds.dims or "member" in ds.coords:
-        rename_map["member"] = "M"
-    if "lead" in ds.dims or "lead" in ds.coords:
-        rename_map["lead"] = "L"
-    if "lat" in ds.dims or "lat" in ds.coords:
-        rename_map["lat"] = "Y"
-    if "latitude" in ds.dims or "latitude" in ds.coords:
-        rename_map["latitude"] = "Y"
-    if "lon" in ds.dims or "lon" in ds.coords:
-        rename_map["lon"] = "X"
-    if "longitude" in ds.dims or "longitude" in ds.coords:
-        rename_map["longitude"] = "X"
-    if rename_map:
-        ds = ds.rename(rename_map)
-
-    # Normalize lead centers → integer indices
-    if "L" in ds.coords:
-        ds = ds.assign_coords(L=ds["L"].astype(int))
-
-    ds = normalize_forecast_dataset(ds, model, var)
-
-    return ds
-
+    return xr.open_dataset(fpath, decode_times=True)
 
 def open_monthly_climatology(
     clim_root: Path,
@@ -75,36 +47,38 @@ def open_monthly_climatology(
     var: str,
     lev: str,
     raw: xr.Dataset,
-    time: pd.Timestamp,
 ) -> Optional[xr.Dataset]:
-    """
-    Open climatology file and select appropriate month.
-    """
 
-    # Only add underscore if lev is not empty
+    print(
+        "[DIAG] open_monthly_climatology received dims:",
+        raw.dims,
+        "coords:",
+        list(raw.coords)
+    )
+
+    # Build file path (unchanged)
     if lev:
         fpath = clim_root / f"{model}.{var}_{lev}.clim.1991-2020.nc"
     else:
         fpath = clim_root / f"{model}.{var}.clim.1991-2020.nc"
-    print(f"[DEBUG] Trying to open climatology file: {fpath}")
-    print(f"[DEBUG] Trying to open climatology file: {fpath}")
 
     if not fpath.exists():
         return None
 
     ds = xr.open_dataset(fpath)
 
-    if "month" in ds.coords:
-        month_val = int(time.month)
-        months = set(int(m) for m in ds["month"].values.tolist())
-        if month_val not in months:
-            return None
-        return ds.sel(month=month_val)
+    # Select the appropriate variable from the climatology file
+    clim_da = ds[var]
+    
+    # ----------------------------
+    # Final safety checks
+    # ----------------------------
+    assert "lead" in clim_da.dims, "Climatology missing lead dimension"
+    assert "latitude" in clim_da.dims or "lat" in clim_da.dims, "Climatology missing latitude"
+    assert "longitude" in clim_da.dims or "lon" in clim_da.dims, "Climatology missing longitude"
 
-    return ds
+    return clim_da
 
-import cftime
-import numpy as np
 
 def decode_S_cftime(ds):
     """
