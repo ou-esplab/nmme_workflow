@@ -114,11 +114,33 @@ def build_output_path(
 
 
 def sanitize_for_write(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Remove conflicting NetCDF fill/missing metadata before writing.
+
+    Required for variables like h500 that carry legacy missing_value
+    attributes or encodings.
+    """
+    import numpy as np
+
     ds = ds.copy()
-    for name in ds.variables:
-        attrs = ds[name].attrs
-        if "_FillValue" in attrs and "missing_value" in attrs:
-            attrs.pop("missing_value", None)
+
+    for name in ds.data_vars:
+        var = ds[name]
+
+        # --- Attribute-level cleanup ---
+        if "_FillValue" in var.attrs:
+            if np.isnan(var.attrs["_FillValue"]):
+                var.attrs.pop("missing_value", None)
+
+        # --- Encoding-level cleanup (CRITICAL) ---
+        enc = var.encoding
+        if "missing_value" in enc:
+            del enc["missing_value"]
+
+        if "_FillValue" in enc:
+            # Normalize to NaN to match xarray expectations
+            enc["_FillValue"] = np.nan
+
     return ds
 
 

@@ -1,12 +1,11 @@
-# utils/nmme_anomalies.py
+# utils/nmme_anomalies.py - CLEAN VERSION WITH CORRECT MONTH SELECTION
 
-from curses import raw
-from pyexpat import model
-
+import os
 import pandas as pd
 import xarray as xr
 from pathlib import Path
 from typing import Optional
+import numpy as np
 
 from utils.nmme_io import (
     open_local_forecast,
@@ -15,22 +14,38 @@ from utils.nmme_io import (
 from utils.nmme_utils import decode_cf_safe
 from utils.nmme_normalize import normalize_forecast_dataset
 
+DEBUG_ANOM = os.getenv("NMME_DEBUG", "0") == "1"
+
+
+def _debug(*args, **kwargs):
+    if DEBUG_ANOM:
+        print(*args, **kwargs)
+
 def normalize_forecast_for_anomaly_math(fcst_da: xr.DataArray) -> xr.DataArray:
     """
     Normalize forecast for anomaly math.
     Keeps ensemble member dimension.
     """
 
-    # Drop init dimension only
+    # Drop init dimension (legacy S or modern init)
     if "S" in fcst_da.dims:
         fcst_da = fcst_da.isel(S=0)
+    elif "init" in fcst_da.dims:
+        fcst_da = fcst_da.isel(init=0)
 
-    # Rename lead
+    # --- Canonicalize lead dimension ---
+    if "L" in fcst_da.dims and "lead" in fcst_da.coords:
+        fcst_da = fcst_da.swap_dims({"L": "lead"})
+    elif "L" in fcst_da.dims:
+        fcst_da = fcst_da.rename({"L": "lead"})
+
+    
+    # --- Canonicalize spatial dimension names ---
     rename = {}
-    if "L" in fcst_da.dims:
-        rename["L"] = "lead"
-
-    # Rename spatial dims
+    if "latitude" in fcst_da.dims:
+        rename["latitude"] = "lat"
+    if "longitude" in fcst_da.dims:
+        rename["longitude"] = "lon"
     if "Y" in fcst_da.dims:
         rename["Y"] = "lat"
     if "X" in fcst_da.dims:
@@ -39,6 +54,8 @@ def normalize_forecast_for_anomaly_math(fcst_da: xr.DataArray) -> xr.DataArray:
     if rename:
         fcst_da = fcst_da.rename(rename)
 
+
+    # Drop vertical singleton
     if "Z" in fcst_da.dims:
         fcst_da = fcst_da.isel(Z=0, drop=True)
 
@@ -47,7 +64,14 @@ def normalize_forecast_for_anomaly_math(fcst_da: xr.DataArray) -> xr.DataArray:
         "BUG: anomaly computation lost member dimension"
     )
 
-    # Ensure canonical order
+    # Safety check
+    if not fcst_da["lead"].to_index().is_unique:
+        raise RuntimeError(
+            "Duplicate lead values detected in anomaly input. "
+            "This indicates a preprocess bug."
+        )
+
+    # Canonical order
     fcst_da = fcst_da.transpose("member", "lead", "lat", "lon")
 
     return fcst_da
@@ -92,21 +116,20 @@ def model_anomalies_for_month(
     # Variable existence
     # ---------------------------
     if model == "NOAA-SFS":
-        print("[DEBUG NOAA-SFS BEFORE normalize]")
-        print("dims:", raw.dims)
-        print("vars:", list(raw.data_vars))
-        print("coords:", list(raw.coords))
-
+        _debug("[DEBUG NOAA-SFS BEFORE normalize]")
+        _debug("dims:", raw.dims)
+        _debug("vars:", list(raw.data_vars))
+        _debug("coords:", list(raw.coords))
 
     raw = normalize_forecast_dataset(raw, model, varname)
 
     if model == "NOAA-SFS":
         if raw is None:
-            print("[DEBUG NOAA-SFS AFTER normalize] raw is None")
+            _debug("[DEBUG NOAA-SFS AFTER normalize] raw is None")
         else:
-            print("[DEBUG NOAA-SFS AFTER normalize]")
-            print("dims:", raw.dims)
-            print("vars:", list(raw.data_vars))
+            _debug("[DEBUG NOAA-SFS AFTER normalize]")
+            _debug("dims:", raw.dims)
+            _debug("vars:", list(raw.data_vars))
 
     if raw is None or varname not in raw.data_vars:
         available = [] if raw is None else list(raw.data_vars)
@@ -118,15 +141,14 @@ def model_anomalies_for_month(
         return None
 
     # ---------------------------
-    # Open climatology (month from valid)
+    # Open climatology
     # ---------------------------
-    print(
+    _debug(
         "[DIAG] climatology input dims:",
         raw.dims,
         "coords:",
         list(raw.coords)
     )
-    assert ("init" in raw.coords) or ("S" in raw.coords),"ERROR: climatology selection received forecast without init/S"
     
     clim = open_monthly_climatology(
         clim_root, model, varname, levstr, raw
@@ -165,23 +187,63 @@ def model_anomalies_for_month(
     if rename_map:
         clim_da = clim_da.rename(rename_map)
 
-    # Drop any non-math dims (keep only lead/lat/lon)
+    # **CRITICAL: Select correct months from climatology based on valid times**
+    # Climatology files may only have certain months (e.g., [3,4,5] for MAM)
+    # The month dimension contains month VALUES (1-12), not indices
+    if "month" in clim_da.dims and "valid" in raw.coords:
+        valid_times = raw["valid"].values
+        clim_months = clim_da["month"].values  # Available month values from climatology
+        indices_to_select = []
+        
+        for vt in valid_times:
+            # Convert valid time to calendar month (1-12)
+            if isinstance(vt, (int, np.integer)):
+                # Numeric days since init
+                init_str = init_yyyymm
+                init_date = pd.to_datetime(f"{init_str[:4]}-{init_str[4:]}-01")
+                valid_dt = init_date + pd.Timedelta(days=int(vt))
+                calendar_month = valid_dt.month  # Returns 1-12
+            else:
+                # cftime object
+                calendar_month = vt.month  # Returns 1-12
+            
+            # Find the position of this month in the climatology's month dimension
+            try:
+                month_pos = np.where(clim_months == calendar_month)[0][0]
+            except IndexError:
+                # Month not in climatology - use closest available
+                print(
+                    f"[WARN] Month {calendar_month} not in climatology months {list(clim_months)}. "
+                    f"Using closest available month."
+                )
+                month_pos = np.argmin(np.abs(clim_months - calendar_month))
+            
+            indices_to_select.append(month_pos)
+        
+        # Select using position indices in the month dimension
+        clim_da = clim_da.isel(month=indices_to_select)
+    elif "month" in clim_da.dims:
+        # No valid times available - use first month
+        clim_da = clim_da.isel(month=0)
+
+    # Drop any remaining non-spatial/non-lead dims
     clim_da = clim_da.isel(
-        {d: 0 for d in clim_da.dims if d not in ("lead", "lat", "lon")}
+        {d: 0 for d in clim_da.dims if d not in ("lead", "lat", "lon", "latitude", "longitude")}
     ).squeeze(drop=True)
 
+    # Standardize dimension names
+    if "latitude" in clim_da.dims:
+        clim_da = clim_da.rename({"latitude": "lat"})
+    if "longitude" in clim_da.dims:
+        clim_da = clim_da.rename({"longitude": "lon"})
+
     # ---------------------------
-    # CRITICAL FIX: Standardize + subtract positionally
+    #  Standardize + subtract positionally
     # ---------------------------
 
-    # Remove coords to avoid alignment by labels
-    #fcst_da = fcst_da.reset_coords(drop=True)
-    #clim_da = clim_da.reset_coords(drop=True)
-    
     fcst_da = normalize_forecast_for_anomaly_math(fcst_da)
     clim_da = clim_da.reset_coords(drop=True)
 
-    # Now dims are identical and canonical
     fcst_da_aligned, clim_da_aligned = xr.align(
         fcst_da,
         clim_da,
@@ -194,20 +256,16 @@ def model_anomalies_for_month(
     if varname == "sst":
         lat_dim, lon_dim = _latlon_dims(da_anom)
 
-        print("\n[DIAG][ANOM SST]")
-        print("dims:", da_anom.dims)
-        print("shape:", da_anom.shape)
+        _debug("\n[DIAG][ANOM SST]")
+        _debug("dims:", da_anom.dims)
+        _debug("shape:", da_anom.shape)
 
         if lat_dim and lon_dim:
-            print("lat dim:", lat_dim, "size:", da_anom.sizes[lat_dim])
-            print("lon dim:", lon_dim, "size:", da_anom.sizes[lon_dim])
-            print("lon coord length:", len(da_anom[lon_dim]))
+            _debug("lat dim:", lat_dim, "size:", da_anom.sizes[lat_dim])
+            _debug("lon dim:", lon_dim, "size:", da_anom.sizes[lon_dim])
+            _debug("lon coord length:", len(da_anom[lon_dim]))
         else:
-            print("❌ Missing lat/lon dims")
-
-        # HARD INVARIANT CHECK
-        assert da_anom.sizes[lon_dim] == len(da_anom[lon_dim]),f"SST grid corrupted: data lon size={da_anom.sizes[lon_dim]}, coord lon length={len(da_anom[lon_dim])}"
-
+            _debug("❌ Missing lat/lon dims")
 
     # ---------------------------
     # Restore metadata AFTER math

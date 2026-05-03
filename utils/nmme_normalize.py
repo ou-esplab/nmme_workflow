@@ -152,11 +152,27 @@ def normalize_forecast_dataset(
             # Handle array of length 1
             if isinstance(S, (list, tuple, np.ndarray)) and len(S) == 1:
                 S = S[0]
-            if isinstance(S, cftime.Datetime360Day) or isinstance(S, cftime.datetime):
+
+            # If S is already a cftime/datetime object, use it.
+            if isinstance(S, (cftime.Datetime360Day, cftime.datetime)):
                 S_val = S
             else:
-                print(f"[ERROR] 'S' is not a cftime object: {S} (type: {type(S)})")
+                # Attempt to decode numeric time coordinate using CF units/calendar
                 S_val = None
+                try:
+                    units = raw["S"].attrs.get("units")
+                    calendar = raw["S"].attrs.get("calendar", "standard")
+                    if units is not None:
+                        from cftime import num2date
+
+                        # num2date accepts arrays or scalars; ensure float input
+                        S_val = num2date(float(S), units, calendar=calendar)
+                        print(f"[DEBUG] Decoded numeric 'S' via cftime.num2date -> {S_val}")
+                except Exception:
+                    S_val = None
+
+                if S_val is None:
+                    print(f"[ERROR] 'S' is not a cftime object: {S} (type: {type(S)})")
 
         def add_months_cftime(dt, months):
             # Handles month overflow for cftime.Datetime360Day and similar
@@ -171,5 +187,90 @@ def normalize_forecast_dataset(
             print(f"[DEBUG] Skipped adding 'valid' in normalization: could not parse 'S' from {raw.coords}")
     else:
         print(f"[DEBUG] Skipped adding 'valid' in normalization: no lead dimension in {raw.dims}")
+
+    # --- Canonicalize coordinate names (avoid duplicate helper funcs) ---
+    rename = {}
+    if "latitude" in raw.coords or "latitude" in raw.dims:
+        rename["latitude"] = "lat"
+    if "longitude" in raw.coords or "longitude" in raw.dims:
+        rename["longitude"] = "lon"
+    if "M" in raw.dims and "member" not in raw.dims:
+        rename["M"] = "member"
+    if "L" in raw.dims and "lead" not in raw.dims:
+        rename["L"] = "lead"
+
+    if rename:
+        raw = raw.rename(rename)
+
+    # --- Ensure 'valid' uses cftime objects (convert numpy datetime64 if present) ---
+    if "valid" in raw.coords:
+        try:
+            v_dtype = str(raw.coords["valid"].dtype)
+        except Exception:
+            v_dtype = ""
+
+        if "datetime64" in v_dtype:
+            import pandas as pd
+            import cftime as _cftime
+
+            vals = raw.coords["valid"].values
+            conv = []
+
+            # Attempt to infer calendar from the original S/init coord or dataset
+            calendar = None
+            if "S" in raw.coords:
+                calendar = raw["S"].attrs.get("calendar")
+            if calendar is None:
+                calendar = raw.attrs.get("calendar")
+            if calendar == "360":
+                calendar = "360_day"
+
+            for v in vals:
+                ts = pd.to_datetime(v)
+                if calendar and "360" in str(calendar):
+                    conv.append(_cftime.Datetime360Day(ts.year, ts.month, ts.day))
+                else:
+                    conv.append(_cftime.DatetimeGregorian(ts.year, ts.month, ts.day))
+
+            # preserve lead-dimension association when reassigning
+            lead_dim = raw.coords["valid"].dims[0] if raw.coords["valid"].dims else "lead"
+            raw = raw.assign_coords(valid=(lead_dim, conv))
+
+    # --- Enforce dtypes for member/lead/lat/lon ---
+    try:
+        if "member" in raw.coords:
+            raw = raw.assign_coords(member=raw.coords["member"].astype("int32"))
+    except Exception:
+        pass
+
+    try:
+        if "lead" in raw.coords:
+            raw = raw.assign_coords(lead=raw.coords["lead"].astype("int32"))
+    except Exception:
+        pass
+
+    try:
+        if "lat" in raw.coords and getattr(raw.coords["lat"].dtype, "kind", "f") != "f":
+            raw = raw.assign_coords(lat=raw.coords["lat"].astype("float32"))
+    except Exception:
+        pass
+
+    try:
+        if "lon" in raw.coords and getattr(raw.coords["lon"].dtype, "kind", "f") != "f":
+            raw = raw.assign_coords(lon=raw.coords["lon"].astype("float32"))
+    except Exception:
+        pass
+
+    # --- Reorder dimensions to canonical order while preserving extras ---
+    canonical = ["member", "lead", "lat", "lon"]
+    present = [d for d in canonical if d in raw.dims]
+    remaining = [d for d in raw.dims if d not in present]
+    order = present + remaining
+    if tuple(order) != tuple(raw.dims):
+        try:
+            raw = raw.transpose(*order)
+        except Exception:
+            # If transpose fails, leave as-is and let downstream checks handle it
+            pass
 
     return raw

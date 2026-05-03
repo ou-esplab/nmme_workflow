@@ -13,6 +13,10 @@ from datetime import datetime
 import pandas as pd
 import warnings
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from utils.config import load_config
 from utils.paths import ensure_dir
 from utils.nmme_products_utils import (
@@ -61,6 +65,7 @@ def main() -> int:
     fcst_yyyymm = fcstdate.strftime("%Y%m")
 
     cfg = load_config(args.config)
+    land_ocean_mask = cfg.get("plotting", {}).get("land_ocean_mask")
 
     # ✅ NOW SAFE TO USE
     data_root = (
@@ -102,7 +107,7 @@ def main() -> int:
         print("[DRY-RUN] Dataset summary:")
         print(ds_fcst)
     else:
-        nmme_plot(ds_fcst, figpath)
+        nmme_plot(ds_fcst, figpath, land_mask_path=land_ocean_mask)
         assert "valid" in ds_fcst.coords, ds_fcst.coords
         nmme_write(ds_fcst, fcst_yyyymm)
         print(f"[INFO] Products written for {fcst_yyyymm}")

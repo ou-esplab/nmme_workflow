@@ -125,3 +125,10 @@ pipeline:
 logging:
   directory: ./logs/
   keep_days: 30
+
+
+# ------------------------------------------------------------
+# Plotting
+# ------------------------------------------------------------
+plotting:
+  land_ocean_mask: /data/esplab/shared/model/initialized/nmme/hindcast/monthly/land_cover.nc

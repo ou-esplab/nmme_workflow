@@ -20,27 +20,32 @@ def open_local_forecast(
     init_yyyymm: str,
 ) -> Optional[xr.Dataset]:
     """
-    Open a preprocessed forecast file for one model/variable/init.
+    Open a RAW ingested forecast file for one model/variable/init.
+    Time decoding is disabled intentionally.
     """
 
     year = init_yyyymm[:4]
     month = init_yyyymm[4:6]
 
-    fpath = (
-        Path(root)
-        / model
-        / "forecast"
-        / var
-        / f"{var}_{model}_{year}_{month}.nc"
-    )
-
-    print(f"[DEBUG] looking for forecast file: {fpath}")
-
-    if not fpath.exists():
+    base_dir = Path(root) / model / "forecast" / var
+    if not base_dir.exists():
         return None
 
-    return xr.open_dataset(fpath, decode_times=True)
+    # Preferred canonical filename (used by some models, e.g., NASA)
+    expected = base_dir / f"{var}_{model}_{year}_{month}.nc"
+    print(f"[DEBUG] looking for forecast file: {expected}")
 
+    if expected.exists():
+        filepath = expected
+    else:
+        # Relaxed fallback: variable name is NOT guaranteed in filename
+        matches = list(base_dir.glob(f"*{year}_{month}.nc"))
+        if not matches:
+            return None
+        filepath = matches[0]
+
+    return xr.open_dataset(filepath, decode_times=False)
+    
 def open_monthly_climatology(
     clim_root: Path,
     model: str,

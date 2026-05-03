@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# Ensure project root is in sys.path for module imports
+import sys
+from pathlib import Path
+
 """
 Preprocess stage for NMME workflow.
 
@@ -15,10 +20,6 @@ This file deliberately does NOT:
 Those will be added incrementally after invariants are explicit.
 """
 
-#!/usr/bin/env python3
-
-import sys
-from pathlib import Path
 
 # ---- FIX PYTHON PATH (MUST BE FIRST) ----
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,8 +33,9 @@ import numpy as np
 import cftime
 from utils.config import load_config
 from utils.nmme_metadata import init_models
-from utils.nmme_io import decode_S_cftime
+from normalize_nmme_forecast_vars import normalize_forecast_dataset
 from normalize_nmme_forecast_vars import sanitize_for_write
+from utils.nmme_io import open_local_forecast, decode_S_cftime
 
 def parse_args():
     p = argparse.ArgumentParser(description="NMME preprocess stage (invariant checks only)")
@@ -42,19 +44,74 @@ def parse_args():
     p.add_argument("--init", required=True, help="Init date YYYYMM")
     return p.parse_args()
 
+def finalize_preprocess_schema(ds: xr.Dataset) -> xr.Dataset:
+    # --- Canonicalize lead dimension ---
+    if "L" in ds.dims and "lead" in ds.coords:
+        ds = ds.swap_dims({"L": "lead"})
+    elif "L" in ds.dims:
+        ds = ds.rename({"L": "lead"})
 
+    # --- Canonicalize spatial dimensions ---
+    rename = {}
+    if "Y" in ds.dims:
+        rename["Y"] = "lat"
+    if "X" in ds.dims:
+        rename["X"] = "lon"
+    if "latitude" in ds.dims:
+        rename["latitude"] = "lat"
+    if "longitude" in ds.dims:
+        rename["longitude"] = "lon"
+
+    if rename:
+        ds = ds.rename(rename)
+
+    # --- Drop legacy coords that must never propagate ---
+    for legacy in ("L", "X", "Y", "S", "latitude", "longitude"):
+        if legacy in ds.coords:
+            ds = ds.drop_vars(legacy, errors="ignore")
+
+    # --- Enforce final invariant ---
+    expected = {"member", "lead", "lat", "lon"}
+    if set(ds.dims) != expected:
+        raise RuntimeError(
+            f"Preprocess schema violation. "
+            f"Expected dims {expected}, got {set(ds.dims)}"
+        )
+
+    # Reorder dimensions to canonical order: member, lead, lat, lon
+    canonical = ["member", "lead", "lat", "lon"]
+    present = [d for d in canonical if d in ds.dims]
+    # Keep any remaining dims after canonical order (shouldn't be any)
+    remaining = [d for d in ds.dims if d not in present]
+    order = present + remaining
+    try:
+        if tuple(order) != tuple(ds.dims):
+            ds = ds.transpose(*order)
+    except Exception:
+        # If transpose fails for any reason, surface a clear error
+        raise RuntimeError(f"Failed to reorder dims to canonical order: {order}")
+
+    return ds
+
+
+"""
+UNUSED
 def iter_forecast_dirs(root: Path, models, variables):
-    """
+    
     Yield forecast directories of the form:
       <root>/<model>/forecast/<var>/
-    """
+    
     for model in models:
         for var in variables:
             d = root / model / "forecast" / var
             if d.exists():
                 yield model, var, d
 
+"""
 
+"""
+
+UNUSED
 def forecast_matches_init(ds: xr.Dataset, init_yyyymm: str) -> bool:
     init_coord = None
     for name in ("S", "init", "time"):
@@ -70,147 +127,49 @@ def forecast_matches_init(ds: xr.Dataset, init_yyyymm: str) -> bool:
         init_val = init_val[0]
 
     return f"{init_val.year:04d}{init_val.month:02d}" == init_yyyymm
-
-
-def find_valid_forecast(root: Path, cfg, init_yyyymm: str) -> bool:
+"""
+    
+def find_valid_forecast(
+    data_root: Path,
+    cfg,
+    init_yyyymm: str,
+) -> bool:
     """
-    Check whether at least one usable preprocessed forecast exists
-    for the requested init. This is an invariant check only.
-
-    Returns True if any (model, variable) dataset is found.
+    Preprocess invariant:
+    Return True if at least one usable RAW forecast dataset exists
+    for this init (ingested data).
     """
 
-    model_meta, _,_,_ = init_models()
-    models = [m["model"] for m in model_meta]
-    variables = sorted({v for m in model_meta for v in m["varnames"]})
-
-    # Convert 202604 -> 2026_04
-    init_token = f"{init_yyyymm[:4]}{init_yyyymm[4:]}"  # "2026_04"
-
-    # Root where preprocessed monthly outputs should already exist
-    pre_root = (
-        Path(cfg["data"]["local"]["preprocess_root"])
-        / init_token
-        / "preprocess"
-    )
-
-    processed = set()
-
-    # Loop over all model / variable combinations
-    for model in models:
-        for var in variables:
-            var_dir = (
-                pre_root
-                / model
-                / "forecast"
-                / var
-            )
-
-            if not var_dir.exists():
-                continue
-
-            nc_files = list(var_dir.glob("*.nc"))
-            if not nc_files:
-                continue
-
-            # Found at least one usable dataset
-            processed.add((model, var))
-
-    # Final invariant check
-    if not processed:
-        print(
-            f"[PREPROCESS] No usable forecast datasets found for init={init_yyyymm}"
-        )
-        return False
-
-    print(
-        f"[PREPROCESS] Found usable forecast datasets: {sorted(processed)}"
-    )
-    return True
-
-def ensure_forecast_dirs(root: Path, init_yyyymm: str):
-    # Monthly (already effectively done elsewhere)
-    monthly_root = (
-        root
-        / "forecast"
-        / "monthly"
-        / init_yyyymm
-    )
-    monthly_root.mkdir(parents=True, exist_ok=True)
-
-    # ✅ Seasonal (NEW, explicit)
-    seasonal_data = (
-        root
-        / "forecast"
-        / "seasonal"
-        / init_yyyymm
-        / "data"
-    )
-    seasonal_data.mkdir(parents=True, exist_ok=True)
-
-    # --------------------------------------------------
-    # MAIN PROCESSING LOOP
-    # --------------------------------------------------
-    yyyy_mm = f"{init_yyyymm[:4]}_{init_yyyymm[4:]}"
-    for model, var, d in iter_forecast_dirs(root, models, variables):
-        for nc in d.glob("*.nc"):
-            if yyyy_mm not in nc.name:
-                continue
-            try:
-                with xr.open_dataset(nc, decode_times=False) as ds:
-                    ds = decode_S_cftime(ds)
-
-                    # 1. normalize structure
-                    ds = construct_valid(ds)
-
-                    # 2. SELECT forecast cycle (authoritative)
-                    ds_init = extract_init_yyyymm(ds)
-                    if ds_init != init_yyyymm:
-                        continue
-
-                    # 3. write preprocessed output
-                    out_nc = pre_root / model / "forecast" / var / nc.name
-                    out_nc.parent.mkdir(parents=True, exist_ok=True)
-
-                    if out_nc.exists():
-                        print(f"[PREPROCESS] exists, skipping -> {out_nc}")
-                    else:
-                        ds = sanitize_for_write(ds)
-                        ds.to_netcdf(out_nc)
-                        print(f"[PREPROCESS] wrote -> {out_nc}")
-
-                    processed.add((model, var))
-
-            except Exception as e:
-                print(f"[PREPROCESS] skipping {nc}: {e}")
-
-    # --------------------------------------------------
-    # SOFT COMPLETENESS WARNINGS
-    # --------------------------------------------------
-    by_model = {}
-    for m, v in processed:
-        by_model.setdefault(m, set()).add(v)
+    model_meta, _, _, _ = init_models()
 
     for m in model_meta:
         model = m["model"]
-        expected = set(m["varnames"])
-        have = by_model.get(model, set())
-        missing = expected - have
-
-        for v in sorted(missing):
-            print(
-                f"[PREPROCESS][WARN] missing variable for init {init_yyyymm}: "
-                f"model={model} var={v}"
+        for var in m["varnames"]:
+            raw = open_local_forecast(
+                data_root,
+                model,
+                var,
+                init_yyyymm,
             )
 
-    # --------------------------------------------------
-    # FINAL INVARIANT
-    # --------------------------------------------------
-    return bool(processed)
+            if raw is not None:
+                print(
+                    f"[PREPROCESS] Found raw forecast: "
+                    f"model={model}, var={var}, init={init_yyyymm}"
+                )
+                return True
 
+    print(
+        f"[PREPROCESS] No usable RAW forecast datasets found "
+        f"for init={init_yyyymm}"
+    )
+    return False
 
+"""
+
+UNUSED
 def extract_init_yyyymm(ds) -> str:
-    """
+    
     Extract forecast initialization date as YYYYMM from an xarray Dataset.
 
     Supported init-time conventions:
@@ -223,7 +182,7 @@ def extract_init_yyyymm(ds) -> str:
 
     Raises:
         RuntimeError if no usable init time can be determined.
-    """
+    
     import numpy as np
     import pandas as pd
 
@@ -261,14 +220,15 @@ def extract_init_yyyymm(ds) -> str:
 
     return f"{year:04d}{month:02d}"
 
+"""
 
 def add_months_cftime(dt, months):
     year = dt.year + (dt.month - 1 + months) // 12
     month = (dt.month - 1 + months) % 12 + 1
     return type(dt)(year, month, 1)
 
-
 def construct_valid(ds: xr.Dataset) -> xr.Dataset:
+    
     """
     Construct a 'valid' coordinate from init time + lead.
 
@@ -293,17 +253,22 @@ def construct_valid(ds: xr.Dataset) -> xr.Dataset:
     if lead_dim is None:
         raise RuntimeError("Cannot construct 'valid': no lead/L dimension")
 
-    # ✅ ENFORCE INTEGER LEAD MONTH INDEX (AUTHORITATIVE)
-    # Legacy storage had L = month + 0.5; normalize here, once.
     lead_vals = ds[lead_dim].values
 
-    # Convert to integer month index
-    lead_int = (lead_vals - 0.5).astype(int)
+    # Only normalize if lead is fractional (legacy NMME encoding)
+    if not np.all(np.equal(lead_vals, lead_vals.astype(int))):
+        lead_int = np.round(lead_vals - 0.5).astype(int)
+    else:
+        lead_int = lead_vals.astype(int)
 
-    ds = ds.assign_coords(
-        {lead_dim: (lead_dim, lead_int)}
-    )
+    # Hard invariant
+    if len(np.unique(lead_int)) != len(lead_int):
+        raise RuntimeError(
+            f"Duplicate lead values after normalization: {lead_int}"
+        )
 
+    ds = ds.assign_coords(lead=(lead_dim, lead_int))
+    
     # ---- init time ----
     init_coord = None
     for name in ("S", "init", "time"):
@@ -326,13 +291,41 @@ def construct_valid(ds: xr.Dataset) -> xr.Dataset:
     valid = []
 
     # ---- datetime handling ----
-    if isinstance(init_val, (cftime.datetime, cftime.Datetime360Day)):
-        for l in leads:
-            valid.append(add_months_cftime(init_val, int(l)))
-    else:
-        init_val = pd.Timestamp(init_val)
-        for l in leads:
-            valid.append(init_val + pd.DateOffset(months=int(l)))
+    # Prefer cftime objects for 'valid'. If init coordinate is numeric and
+    # carries CF units/calendar metadata, decode to cftime. Otherwise,
+    # fallback to converting a pandas Timestamp to an appropriate cftime
+    # type (respecting 360-day calendar when present).
+    if not isinstance(init_val, (cftime.datetime, cftime.Datetime360Day)):
+        # Attempt CF-style numeric decode when units present on the init coord
+        try:
+            units = ds[init_coord].attrs.get("units") if init_coord in ds.coords else None
+            calendar = ds[init_coord].attrs.get("calendar", "standard") if init_coord in ds.coords else "standard"
+            if calendar == "360":
+                calendar = "360_day"
+            if units is not None:
+                # num2date handles scalars or arrays
+                init_val = cftime.num2date(float(init_val), units, calendar=calendar)
+        except Exception:
+            init_val = None
+
+    if init_val is None:
+        # Final fallback: convert via pandas then to cftime
+        ts = pd.Timestamp(ds[init_coord].values if init_coord in ds.coords else init_val)
+        # Choose cftime type based on declared calendar (if any)
+        calendar = None
+        if init_coord in ds.coords:
+            calendar = ds[init_coord].attrs.get("calendar")
+        if calendar == "360":
+            calendar = "360_day"
+
+        if calendar and "360" in calendar:
+            init_val = cftime.Datetime360Day(ts.year, ts.month, ts.day)
+        else:
+            init_val = cftime.DatetimeGregorian(ts.year, ts.month, ts.day)
+
+    # Now build 'valid' values using cftime-aware month addition
+    for l in leads:
+        valid.append(add_months_cftime(init_val, int(l)))
 
     return ds.assign_coords(valid=(lead_dim, valid))
 
@@ -343,35 +336,187 @@ def main() -> int:
 
     data_root = Path(cfg["data"]["local"]["root"])
 
+    # monthly preprocess_root points to .../forecast/monthly
     preprocess_root = Path(cfg["data"]["local"]["preprocess_root"]).parent
-    
-    seasonal_base = (
-      preprocess_root
-      / "seasonal"
-      / args.init
-    )
 
-    (seasonal_base / "data").mkdir(parents=True, exist_ok=True)
-    (seasonal_base / "images").mkdir(parents=True, exist_ok=True)
-
-    print("[PREPROCESS] Running invariant checks only")
+    print("[PREPROCESS] Running preprocess")
     print(f"[PREPROCESS] system = {args.system}")
     print(f"[PREPROCESS] init   = {args.init}")
     print(f"[PREPROCESS] root   = {data_root}")
 
+    # ------------------------------------------------------------------
+    # 1. INVARIANT CHECK — raw ingest availability
+    # ------------------------------------------------------------------
     ok = find_valid_forecast(data_root, cfg, args.init)
-
     if not ok:
         raise RuntimeError(
             f"Preprocess invariant failed: "
-            f"no usable forecast datasets were found for init {args.init}. "
-            f"All model/variable combinations were missing or unreadable."
+            f"no usable RAW forecast datasets were found for init {args.init}. "
+            f"Ingest must run successfully before preprocess."
         )
 
-    print("[PREPROCESS] ✅ Invariant satisfied: 'valid' coordinate exists")
-    print("[PREPROCESS] ✅ Preprocess completed successfully (normalized data written)")
-    return 0
+    print("[PREPROCESS] ✅ Invariant satisfied: raw ingest exists")
 
+    # ------------------------------------------------------------------
+    # 2. ENSURE SEASONAL OUTPUT DIRECTORIES
+    # ------------------------------------------------------------------
+    seasonal_base = preprocess_root / "seasonal" / args.init
+    (seasonal_base / "data").mkdir(parents=True, exist_ok=True)
+    (seasonal_base / "images").mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # 3. PREPROCESS ALL MODELS / VARIABLES
+    # ------------------------------------------------------------------
+    model_meta,_,_,_ = init_models()
+
+    init_year  = args.init[:4]
+    init_month = args.init[4:6]
+
+    for m in model_meta:
+        model = m["model"]
+
+        for var in m["varnames"]:
+            print(f"[PREPROCESS] processing model={model} var={var}")
+
+            # ----------------------------------------------------------
+            # Open RAW ingest (no time decoding)
+            # ----------------------------------------------------------
+            ds = open_local_forecast(
+                data_root,
+                model,
+                var,
+                args.init,
+            )
+
+            if ds is None:
+                print(f"[PREPROCESS][SKIP] no raw data model={model} var={var}")
+                continue
+
+            # Decode numeric 'S' coordinate to cftime when possible (uses existing util)
+            try:
+                ds = decode_S_cftime(ds)
+            except Exception:
+                print(f"[PREPROCESS][WARN] decode_S_cftime failed for model={model} var={var}")
+
+            # ----------------------------------------------------------
+            # Normalize forecast dataset
+            # ----------------------------------------------------------
+            ds = normalize_forecast_dataset(ds, model, var)
+            if ds is None or var not in ds.data_vars:
+                print(
+                    f"[PREPROCESS][SKIP] normalize failed "
+                    f"model={model} var={var}"
+                )
+                continue
+
+            # ----------------------------------------------------------
+            # Construct valid coordinate
+            # ----------------------------------------------------------
+            ds = construct_valid(ds)
+
+            # Drop init dimension after valid has been constructed
+            if "S" in ds.dims:
+                if ds.sizes["S"] != 1:
+                    raise RuntimeError("Expected singleton S dimension in preprocess")
+                ds = ds.isel(S=0, drop=True)
+
+            elif "init" in ds.dims:
+                if ds.sizes["init"] != 1:
+                    raise RuntimeError("Expected singleton init dimension in preprocess")
+                ds = ds.isel(init=0, drop=True)
+
+            # Drop vertical singleton dimension after normalization
+            if "Z" in ds.dims:
+                if ds.sizes["Z"] != 1:
+                    raise RuntimeError(
+                        f"Expected singleton Z dimension in preprocess, got size {ds.sizes['Z']}"
+                    )
+                ds = ds.isel(Z=0, drop=True)
+            # ----------------------------------------------------------
+            # Finalize schema (rename dims, drop legacy coords)
+            # ----------------------------------------------------------
+            ds = finalize_preprocess_schema(ds)
+
+            # ----------------------------------------------------------
+            # ----------------------------------------------------------
+            # Final sanitize before write
+            # ----------------------------------------------------------
+            ds = sanitize_for_write(ds)
+
+            # Defensive step: ensure canonical dim ordering before write.
+            canonical = ["member", "lead", "lat", "lon"]
+            present = [d for d in canonical if d in ds.dims]
+            remaining = [d for d in ds.dims if d not in present]
+            order = present + remaining
+            try:
+                if tuple(order) != tuple(ds.dims):
+                    ds = ds.transpose(*order)
+            except Exception:
+                # If transpose fails, raise a clear error so the pipeline
+                # doesn't write non-canonical outputs silently.
+                raise RuntimeError(f"Failed to enforce canonical dim order before write: {order}")
+
+            # ----------------------------------------------------------
+            # WRITE monthly preprocessed output
+            # ----------------------------------------------------------
+            out_dir = (
+                preprocess_root
+                / "monthly"
+                / args.init
+                / "preprocess"
+                / model
+                / "forecast"
+                / var
+            )
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            outfile = out_dir / f"{var}_{model}_{init_year}_{init_month}.nc"
+            # Rebuild dataset to ensure NetCDF dimension definitions
+            # are created in canonical order (member, lead, lat, lon).
+            canonical = ["member", "lead", "lat", "lon"]
+            present = [d for d in canonical if d in ds.dims]
+            remaining = [d for d in ds.dims if d not in present]
+            order = present + remaining
+
+            try:
+                # Prepare coords in the desired order first so dimensions are
+                # recorded in that sequence when the file is written.
+                coords = {}
+                for d in order:
+                    if d in ds.coords:
+                        coords[d] = ds.coords[d]
+                # Add any leftover coords
+                for d in ds.coords:
+                    if d not in coords:
+                        coords[d] = ds.coords[d]
+
+                # Transpose each data variable to the canonical order when
+                # possible to preserve array layout and ensure dimension
+                # declarations follow 'order'.
+                data_vars = {}
+                for name, da in ds.data_vars.items():
+                    try:
+                        # Only transpose dims that are present in the dataarray
+                        transpose_order = [d for d in order if d in da.dims]
+                        if tuple(transpose_order) != tuple(da.dims):
+                            data_vars[name] = da.transpose(*transpose_order)
+                        else:
+                            data_vars[name] = da
+                    except Exception:
+                        data_vars[name] = da
+
+                # Construct a new Dataset with coords added in canonical order
+                ds_to_write = xr.Dataset(data_vars=data_vars, coords=coords, attrs=ds.attrs)
+            except Exception:
+                # Fallback to original dataset if reconstruction fails
+                ds_to_write = ds
+
+            ds_to_write.to_netcdf(outfile)
+
+            print(f"[PREPROCESS][WRITE] {outfile}")
+
+    print("[PREPROCESS] ✅ Preprocess completed successfully")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

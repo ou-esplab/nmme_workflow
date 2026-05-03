@@ -1,7 +1,5 @@
 # utils/nmme_mme.py
 
-from xml.parsers.expat import model
-
 import xarray as xr
 import pandas as pd
 from pathlib import Path
@@ -111,6 +109,15 @@ def build_mme_for_month(
         dim=xr.IndexVariable("model", model_names),
     )
 
+    # Downstream products only use per-model ensemble means and ensemble counts.
+    # Keeping the raw per-member variables here prevents appending the MME row,
+    # because the MME dataset only carries *_ensmean fields.
+    product_vars = [
+        name for name in ds_models.data_vars
+        if name.endswith("_ensmean") or name == "nens"
+    ]
+    ds_models = ds_models[product_vars]
+
     # --- Compute and append MME (multi-model ensemble mean) ---
     mme_vars = {}
     for var in ds_models.data_vars:
@@ -120,6 +127,8 @@ def build_mme_for_month(
     if mme_vars:
         mme_ds = xr.Dataset({k: v.expand_dims("model") for k, v in mme_vars.items()})
         mme_ds = mme_ds.assign_coords(model=(["model"], ["MME"]))
+        if "nens" in ds_models:
+            mme_ds["nens"] = ds_models["nens"].sum(dim="model", skipna=True).expand_dims("model")
         # Copy over coordinates and attrs from ds_models
         for coord in ds_models.coords:
             if coord not in mme_ds.coords:

@@ -1,9 +1,6 @@
-from mimetypes import init
-from pathlib import Path
 import pandas as pd
 import xarray as xr
 from utils.nmme_metadata import init_models
-from pandas import Period
 
 
 def rolling_seasonal_means(ds, window=3):
@@ -20,8 +17,12 @@ def rolling_seasonal_means(ds, window=3):
         w = ds.isel(lead=slice(k, k + window)).mean("lead")
         out.append(w)
 
-        # season label 
-        init = ds.attrs["init_yyyymm"]  # e.g. "202604"
+        # season label
+        init = ds.attrs.get("init_yyyymm", ds.attrs.get("forecast_init"))
+        if init is None:
+            raise KeyError(
+                "rolling_seasonal_means requires 'init_yyyymm' or 'forecast_init' in attrs"
+            )
         label = (pd.Period(init, freq="M") + k).strftime("%b")
         labels.append(label)
 
@@ -33,6 +34,7 @@ def rolling_seasonal_means(ds, window=3):
 def _set_global_attrs(ds: xr.Dataset, fcstdate: str, units: str) -> xr.Dataset:
     ds.attrs["title"] = "NMME monthly/seasonal ensemble-mean anomalies"
     ds.attrs["forecast_init"] = fcstdate
+    ds.attrs["init_yyyymm"] = fcstdate
     ds.attrs["units"] = units
     ds.attrs["source"] = "nmme_workflow"
     return ds
@@ -68,17 +70,13 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
             "nmme_write requires 'valid(L)' coordinate produced by preprocess"
         )
 
-    if "L" in ds_fcst.dims:
-        lead_dim = "L"
-    elif "lead" in ds_fcst.dims:
-        lead_dim = "lead"
-    else:
+    if "L" not in ds_fcst.dims and "lead" not in ds_fcst.dims:
         raise RuntimeError(
             f"No lead dimension in ds_fcst (dims={ds_fcst.dims})"
         )
 
     # Metadata
-    models_meta, vname_map, _, unit_map = init_models()
+    _, _, _, unit_map = init_models()
 
     # ---------------------------
     # Drive products from DATA, not config
@@ -150,8 +148,9 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
         # ---------------------------
         
 
-        # ds_fcst contains anomalies as (lon, lat, lead)
-        ds_seas = rolling_seasonal_means(ds_fcst, window=3)
+        # Compute seasonal means from this variable-only dataset.
+        # Avoid recomputing all variables repeatedly inside the loop.
+        ds_seas = rolling_seasonal_means(ds_models, window=3)
         ds_seas["season"].attrs["long_name"] = "Forecast Valid Season"
 
         ofname_seas = (

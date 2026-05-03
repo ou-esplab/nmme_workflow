@@ -12,7 +12,8 @@ import argparse
 import glob
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Dict, Iterable, Tuple
+import numpy as np
 
 import matplotlib.pyplot as plt
 import xarray as xr
@@ -33,8 +34,17 @@ MODEL_DIR_MAP = {
     "CanESM5": "CanESM5",
     "GEM5.2-NEMO": "GEM5.2-NEMO",
     "NCEP-CFSv2": "NCEP-CFSv2",
+    "COLA-RSMAS-CCSM4": "COLA-RSMAS-CCSM4",
+    "COLA-RSMAS-CESM1": "COLA-RSMAS-CESM1",
     "NOAA-SFS": "NOAA-SFS",
 }
+
+FORECAST_VAR_TO_TERCILE_VAR = {
+    "prec": "prec_sfc",
+    "tref": "tref_2m",
+}
+
+TERCILE_FORECAST_VARS = ("prec", "tref")
 
 SEASON_LEADS: Dict[str, Tuple[int, int]] = {
     "MAM": (0, 3),
@@ -97,7 +107,7 @@ def load_forecast(init_yyyymm: str, out_root: Path) -> xr.Dataset:
         if not fpath.exists():
             raise FileNotFoundError(f"Forecast file not found: {fpath}")
         return xr.open_dataset(fpath)
-    return {var: _load(var) for var in ["prec", "tref", "sst"]}
+    return {var: _load(var) for var in TERCILE_FORECAST_VARS}
 
 
 def hindcast_thresholds_for_model(
@@ -109,17 +119,45 @@ def hindcast_thresholds_for_model(
     sfs_hind_root: Path,
     var: str = "prec_sfc",
 ) -> Tuple[xr.DataArray, xr.DataArray]:
-    # Use precomputed global tercile files
-    # Map variable to canonical name for file
-    var_extract_map = {"prec_sfc": "prec", "tref_2m": "tref", "sst_sfc": "SST"}
-    extract_var = var_extract_map.get(var, var)
     tercile_dir = Path("/data/esplab/shared/model/initialized/nmme/terciles/1991-2020/")
-    tercile_file = tercile_dir / f"{model_name}.{var}.{season}.terciles.1991-2020.nc"
-    if not tercile_file.exists():
-        raise FileNotFoundError(f"Tercile file not found: {tercile_file}")
+
+    # Some models were precomputed with level-suffixed variable names
+    # (prec_sfc/tref_2m/sst_sfc), while others use legacy short names
+    # (prec/tref/sst or SST). Try all likely candidates in priority order.
+    var_candidates = [var]
+    legacy_map = {"prec_sfc": "prec", "tref_2m": "tref", "sst_sfc": "sst"}
+    if var in legacy_map:
+        var_candidates.append(legacy_map[var])
+    if var == "sst_sfc":
+        var_candidates.append("SST")
+
+    tercile_file = None
+    for vname in var_candidates:
+        candidate = tercile_dir / f"{model_name}.{vname}.{season}.terciles.1991-2020.nc"
+        if candidate.exists():
+            tercile_file = candidate
+            break
+
+    if tercile_file is None:
+        tried = [f"{model_name}.{v}.{season}.terciles.1991-2020.nc" for v in var_candidates]
+        raise FileNotFoundError(
+            f"Tercile file not found for model={model_name}, season={season}, "
+            f"var={var}. Tried: {tried}"
+        )
+
     ds = xr.open_dataset(tercile_file)
     t33 = ds["t33"]
     t66 = ds["t66"]
+
+    # Some precomputed tercile files may carry stray non-spatial dims
+    # (e.g., M/member). Reduce those so thresholds are 2D lat/lon maps.
+    for dim in list(t33.dims):
+        if dim not in ("lat", "lon"):
+            t33 = t33.mean(dim=dim, skipna=True)
+    for dim in list(t66.dims):
+        if dim not in ("lat", "lon"):
+            t66 = t66.mean(dim=dim, skipna=True)
+
     # Subset to region
     t33 = subset_region(t33, lat_bounds, lon_bounds)
     t66 = subset_region(t66, lat_bounds, lon_bounds)
@@ -129,11 +167,13 @@ def hindcast_thresholds_for_model(
 
 def compute_region_probabilities(
     ds_fc: xr.Dataset,
+    forecast_var: str,
     season: str,
     lat_bounds: Tuple[float, float],
     lon_bounds: Tuple[float, float],
     hind_root: Path,
     sfs_hind_root: Path,
+    model_names: Iterable[str] | None = None,
 ) -> Dict[str, xr.DataArray]:
     l0, l1 = SEASON_LEADS[season]
 
@@ -141,23 +181,30 @@ def compute_region_probabilities(
     nn_model = []
     an_model = []
 
+    # Authoritative target grid for tercile probabilities: 1-degree regional grid.
+    # Per workflow requirement: only NOAA-SFS is remapped to this grid.
+    lat0, lat1 = sorted([float(lat_bounds[0]), float(lat_bounds[1])])
+    lon0 = (float(lon_bounds[0]) + 360.0) % 360.0
+    lon1 = (float(lon_bounds[1]) + 360.0) % 360.0
 
-    var_map = {"prec": "prec_sfc", "tref": "tref_2m", "sst": "sst_sfc"}
-    for model_name in MODEL_DIR_MAP:
-        # Determine which variable to use based on ds_fc keys
-        # Try to match the model's variable in ds_fc
-        found_var = None
-        for v in var_map:
-            if model_name in ds_fc and v in ds_fc[model_name].name:
-                found_var = var_map[v]
-                break
-        if not found_var:
-            # Fallback: try to infer from ds_fc variable names
-            if model_name in ds_fc:
-                found_var = "prec_sfc"  # Default to prec_sfc if unsure
-            else:
-                print(f"[WARN] Forecast variable missing for {model_name}; skipping")
-                continue
+    target_lat = xr.DataArray(np.arange(lat0, lat1 + 1e-6, 1.0), dims=("lat",), name="lat")
+    if lon0 <= lon1:
+        target_lon_vals = np.arange(lon0, lon1 + 1e-6, 1.0)
+    else:
+        # Dateline wrap case
+        left = np.arange(lon0, 360.0, 1.0)
+        right = np.arange(0.0, lon1 + 1e-6, 1.0)
+        target_lon_vals = np.concatenate([left, right])
+    target_lon = xr.DataArray(target_lon_vals, dims=("lon",), name="lon")
+
+    tercile_var = FORECAST_VAR_TO_TERCILE_VAR[forecast_var]
+    available_models = [name for name in ds_fc.data_vars if name != "MME"]
+    candidate_models = list(model_names) if model_names is not None else available_models
+
+    for model_name in candidate_models:
+        if model_name not in ds_fc:
+            print(f"[WARN] Forecast variable missing for {model_name}; skipping")
+            continue
         try:
             t33, t66 = hindcast_thresholds_for_model(
                 model_name,
@@ -166,7 +213,7 @@ def compute_region_probabilities(
                 lon_bounds,
                 hind_root,
                 sfs_hind_root,
-                var=found_var,
+                var=tercile_var,
             )
         except (FileNotFoundError, RuntimeError) as e:
             print(f"[WARN] Skipping {model_name}: {e}")
@@ -180,9 +227,29 @@ def compute_region_probabilities(
             raise ValueError(f"'lead' dimension not found in {model_name} data array (dims={da.dims})")
         fc = subset_region(fc, lat_bounds, lon_bounds)
 
-        bn = (fc < t33).astype(float) * 100.0
-        nn = ((fc >= t33) & (fc <= t66)).astype(float) * 100.0
-        an = (fc > t66).astype(float) * 100.0
+        # Forecast field can contain NaN padding from union-grid concat.
+        # Trim empty rows/cols before threshold interpolation/comparison.
+        fc = fc.dropna(dim="lat", how="all")
+        fc = fc.dropna(dim="lon", how="all")
+        if fc.sizes.get("lat", 0) == 0 or fc.sizes.get("lon", 0) == 0:
+            print(f"[WARN] No regional data support after trim for {model_name}; skipping")
+            continue
+
+        if model_name == "NOAA-SFS":
+            # NOAA-SFS can be on a higher-resolution grid: interpolate to 1-degree.
+            fc_t = fc.interp(lat=target_lat, lon=target_lon, method="linear")
+            t33_t = t33.interp(lat=target_lat, lon=target_lon, method="linear")
+            t66_t = t66.interp(lat=target_lat, lon=target_lon, method="linear")
+        else:
+            # Other models are expected on the 1-degree target grid already.
+            # Use exact reindexing (no interpolation) to preserve values.
+            fc_t = fc.reindex(lat=target_lat.values, lon=target_lon.values)
+            t33_t = t33.reindex(lat=target_lat.values, lon=target_lon.values)
+            t66_t = t66.reindex(lat=target_lat.values, lon=target_lon.values)
+
+        bn = (fc_t < t33_t).astype(float) * 100.0
+        nn = ((fc_t >= t33_t) & (fc_t <= t66_t)).astype(float) * 100.0
+        an = (fc_t > t66_t).astype(float) * 100.0
 
         bn_model.append(bn)
         nn_model.append(nn)
@@ -191,11 +258,22 @@ def compute_region_probabilities(
     if not bn_model:
         raise RuntimeError("No models were available to compute tercile probabilities")
 
-    return {
+    prob = {
         "BN": xr.concat(bn_model, dim="model", coords="minimal", compat="override").mean("model"),
         "NN": xr.concat(nn_model, dim="model", coords="minimal", compat="override").mean("model"),
         "AN": xr.concat(an_model, dim="model", coords="minimal", compat="override").mean("model"),
     }
+
+    # PREC is noisier and can show artificial banding after categorical
+    # aggregation. Apply a light 3x3 neighborhood smoothing to improve
+    # spatial coherence while preserving probability mass.
+    if forecast_var == "prec":
+        prob = {
+            k: v.rolling(lat=3, lon=3, center=True, min_periods=1).mean()
+            for k, v in prob.items()
+        }
+
+    return prob
 
 
 def plot_probabilities(
@@ -207,6 +285,7 @@ def plot_probabilities(
     out_png: Path,
 ) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(18, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+    levels = np.arange(0, 110, 10)
 
     panels = [
         ("BN", "Below Normal", "Blues"),
@@ -217,14 +296,18 @@ def plot_probabilities(
     for ax, (key, title, cmap) in zip(axes, panels):
         da = prob[key]
         ax.set_extent([float(da.lon.min()), float(da.lon.max()), float(da.lat.min()), float(da.lat.max())])
-        da.plot(
-            ax=ax,
+        m = ax.contourf(
+            da["lon"],
+            da["lat"],
+            da,
+            levels=levels,
             transform=ccrs.PlateCarree(),
             cmap=cmap,
             vmin=0,
             vmax=100,
-            cbar_kwargs={"label": "Probability (%)", "shrink": 0.82, "pad": 0.03},
+            extend="neither",
         )
+        fig.colorbar(m, ax=ax, label="Probability (%)", shrink=0.82, pad=0.03)
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
         ax.add_feature(cfeature.BORDERS, linewidth=0.6)
         ax.add_feature(cfeature.STATES, linewidth=0.4)
@@ -278,6 +361,7 @@ def main() -> int:
 
     ds_fc_dict = load_forecast(args.init, out_root)
     regions = cfg.get("pycpt_regions", [])
+    configured_models = cfg.get("models", [])
     if not regions:
         raise ValueError("No pycpt_regions in config")
 
@@ -303,11 +387,13 @@ def main() -> int:
                 lead_label = build_target_label(args.init, season)
                 prob = compute_region_probabilities(
                     ds_fc,
+                    var,
                     season,
                     lat_bounds,
                     lon_bounds,
                     hind_root,
                     sfs_hind_root,
+                    model_names=configured_models,
                 )
                 # Write tercile probabilities to NetCDF
                 out_nc = tercile_outdir / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"

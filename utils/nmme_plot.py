@@ -24,6 +24,13 @@ PREFERRED_MODEL_ORDER = [
     "MME",
 ]
 
+DEBUG_PLOT = os.getenv("NMME_DEBUG", "0") == "1"
+
+
+def _debug(*args, **kwargs):
+    if DEBUG_PLOT:
+        print(*args, **kwargs)
+
 # ============================================================
 # Selection helpers
 # ============================================================
@@ -50,13 +57,13 @@ def _select_model_and_lead(ds, model, ilead):
     if ds_sel["lead"].values.max() < ilead:
         return None
 
-    print(f"[DIAG] ds_sel dims BEFORE isel: {ds_sel.dims}")
-    print(f"[DIAG] vars BEFORE isel: {list(ds_sel.data_vars)}")
+    _debug(f"[DIAG] ds_sel dims BEFORE isel: {ds_sel.dims}")
+    _debug(f"[DIAG] vars BEFORE isel: {list(ds_sel.data_vars)}")
 
     tmp = ds_sel.isel(lead=ilead, drop=False)
 
-    print(f"[DIAG] vars AFTER isel: {list(tmp.data_vars)}")
-    print(f"[DIAG] nens AFTER isel? {'nens' in tmp}")
+    _debug(f"[DIAG] vars AFTER isel: {list(tmp.data_vars)}")
+    _debug(f"[DIAG] nens AFTER isel? {'nens' in tmp}")
 
     return tmp
     #return ds_sel.sel(lead=ilead,drop=False)
@@ -68,14 +75,36 @@ def _select_model_and_lead(ds, model, ilead):
 
 def _plot_single_panel(
     ax, ds, var, sf, clevs, cmap, norm, title,
-    mproj, lonreg, latreg, statescolor, transform
+    mproj, lonreg, latreg, statescolor, transform, land_mask=None
 ):
     # ✅ Keep the DataArray
     da = ds[f"{var}_ensmean"]
 
+    # Models are concatenated on a union grid; non-native coordinates become NaN.
+    # Trim NaN-only rows/cols so contouring uses each model's actual support.
+    for dim in ("lat", "latitude"):
+        if dim in da.dims:
+            da = da.dropna(dim=dim, how="all")
+            break
+    for dim in ("lon", "longitude"):
+        if dim in da.dims:
+            da = da.dropna(dim=dim, how="all")
+            break
+
+    if da.size == 0 or np.isnan(da.values).all():
+        ax.set_title(f"{title} (no data)", fontsize=9)
+        return None
+
     # ✅ Detect coordinate names robustly
     lat_dim = "lat" if "lat" in da.sizes else "latitude"
     lon_dim = "lon" if "lon" in da.sizes else "longitude"
+
+    if var == "sst" and land_mask is not None:
+        da = _mask_sst_to_ocean(da, land_mask, lat_dim=lat_dim, lon_dim=lon_dim)
+
+    if da.size == 0 or np.isnan(da.values).all():
+        ax.set_title(f"{title} (no data)", fontsize=9)
+        return None
 
     # ✅ Plot using the DataArray’s own coordinates
     m = ax.contourf(
@@ -122,26 +151,90 @@ def _build_model_plot_locs(ds):
 
 
 def _balanced_levels_and_ticks(var_params):
-    base_levels = np.asarray(var_params["clevs"], float)
-    vmax = float(np.nanmax(np.abs(base_levels)))
-    n = len(base_levels) | 1
-    levels = np.linspace(-vmax, vmax, n)
-    
-    norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
-    ticks = np.linspace(-vmax, vmax, 9)
+    levels = np.asarray(var_params["clevs"], float)
+    vmin = float(np.nanmin(levels))
+    vmax = float(np.nanmax(levels))
+
+    norm = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax)
+    ticks = levels
     return levels, norm, ticks
+
+
+def _normalize_lon_to_target(mask_da, target_lon):
+    target_has_neg = float(np.nanmin(target_lon.values)) < 0
+    mask_has_neg = float(np.nanmin(mask_da["lon"].values)) < 0
+
+    if target_has_neg and not mask_has_neg:
+        return mask_da.assign_coords(
+            lon=(((mask_da["lon"] + 180) % 360) - 180)
+        ).sortby("lon")
+
+    if (not target_has_neg) and mask_has_neg:
+        return mask_da.assign_coords(lon=(mask_da["lon"] % 360)).sortby("lon")
+
+    return mask_da
+
+
+def _load_land_mask(mask_path):
+    if not mask_path:
+        return None
+    try:
+        ds_mask = xr.open_dataset(mask_path)
+    except Exception as exc:
+        print(f"[WARN] Could not open land/ocean mask '{mask_path}': {exc}")
+        return None
+
+    for candidate in ("land", "lsmask", "mask"):
+        if candidate in ds_mask.data_vars:
+            mask = ds_mask[candidate]
+            break
+    else:
+        print(f"[WARN] No mask variable found in '{mask_path}'.")
+        ds_mask.close()
+        return None
+
+    # Keep only mask and close the source dataset immediately.
+    mask = mask.load()
+    ds_mask.close()
+
+    rename = {}
+    if "latitude" in mask.dims and "lat" not in mask.dims:
+        rename["latitude"] = "lat"
+    if "longitude" in mask.dims and "lon" not in mask.dims:
+        rename["longitude"] = "lon"
+    if rename:
+        mask = mask.rename(rename)
+
+    if not {"lat", "lon"}.issubset(mask.dims):
+        print(f"[WARN] Land/ocean mask missing lat/lon dims in '{mask_path}'.")
+        return None
+
+    return mask
+
+
+def _mask_sst_to_ocean(da, land_mask, lat_dim, lon_dim):
+    target_lat = da[lat_dim]
+    target_lon = da[lon_dim]
+
+    mask = _normalize_lon_to_target(land_mask, target_lon)
+    mask_on_grid = mask.interp(lat=target_lat, lon=target_lon, method="nearest")
+
+    # NMME land_cover.nc stores land as 1 and ocean as 0.
+    ocean = mask_on_grid < 0.5
+    return da.where(ocean)
 
 
 # ============================================================
 # Main plotting entry point
 # ============================================================
 
-def nmme_plot(ds, path):
+def nmme_plot(ds, path, land_mask_path=None):
     """
     Generate NMME forecast anomaly maps.
     """
     var_params_dict, reg_params_dict = initPlotParams()
     model_plot_locs = _build_model_plot_locs(ds)
+    land_mask = _load_land_mask(land_mask_path)
 
     os.makedirs(path, exist_ok=True)
     fcstdate = ds.attrs["init_yyyymm"]
@@ -155,12 +248,12 @@ def nmme_plot(ds, path):
             figname = path / f"{var_params['outname']}{reg['name']}"
 
             _plot_variable_for_region(
-                ds, v, var_params, reg, figname, model_plot_locs, fcstdate
+                ds, v, var_params, reg, figname, model_plot_locs, fcstdate, land_mask
             )
 
 
 def _plot_variable_for_region(
-    ds, v, var_params, reg, figname, model_plot_locs, fcstdate
+    ds, v, var_params, reg, figname, model_plot_locs, fcstdate, land_mask
 ):
     max_leads = 9
     clevs, norm, ticks = _balanced_levels_and_ticks(var_params)
@@ -185,12 +278,13 @@ def _plot_variable_for_region(
             ax.set_visible(i in model_plot_locs.values())
 
         sub_nens = 0
+        mappable = None
 
         for model, iplot in model_plot_locs.items():
-            print("\n[DIAG] Global lead coordinate:")
-            print("  lead values:", ds["lead"].values)
-            print("  lead dtype :", ds["lead"].dtype)
-            print("  lead size  :", ds.sizes["lead"])
+            _debug("\n[DIAG] Global lead coordinate:")
+            _debug("  lead values:", ds["lead"].values)
+            _debug("  lead dtype :", ds["lead"].dtype)
+            _debug("  lead size  :", ds.sizes["lead"])
             ds_sel = _select_model_and_lead(ds, model, ilead)
             if ds_sel is None:
                 continue
@@ -204,7 +298,7 @@ def _plot_variable_for_region(
 
             nens_val = ds_sel["nens"].values
             if np.isnan(nens_val):
-                print(f"[DIAG] NaN nens detected: model={model}, variable={v}, lead={ilead}, region={reg['name']}, init={fcstdate}")
+                _debug(f"[DIAG] NaN nens detected: model={model}, variable={v}, lead={ilead}, region={reg['name']}, init={fcstdate}")
                 nens = "NaN"
             else:
                 nens = int(nens_val)
@@ -230,7 +324,10 @@ def _plot_variable_for_region(
                 reg["lats"],
                 reg["state_colors"],
                 data_crs,
+                land_mask=land_mask,
             )
+            if m is not None:
+                mappable = m
 
         fig.suptitle(
             f"NMME Forecast {fcstmonth_str} {var_params['label']} "
@@ -238,15 +335,16 @@ def _plot_variable_for_region(
             fontsize=12,
         )
 
-        fig.colorbar(
-            m,
-            ax=[axs_flat[i] for i in model_plot_locs.values()],
-            orientation="horizontal",
-            fraction=0.04,
-            pad=0.04,
-            ticks=ticks,
-            label=var_params["units"],
-        )
+        if mappable is not None:
+            fig.colorbar(
+                mappable,
+                ax=[axs_flat[i] for i in model_plot_locs.values()],
+                orientation="horizontal",
+                fraction=0.04,
+                pad=0.04,
+                ticks=ticks,
+                label=var_params["units"],
+            )
 
         out = f"{figname}Month{ilead}.png"
         print(f"Writing figure: {out}")
