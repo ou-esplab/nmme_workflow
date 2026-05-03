@@ -104,7 +104,7 @@ SFS_CLIMO_END_YEAR="${SFS_CLIMO_END_YEAR:-$(cfg_get 'pipeline.sfs.climo_end_year
 
 # Forecast file normalization
 NMME_NORMALIZE_PYTHON="${NMME_NORMALIZE_PYTHON:-python3}"
-NMME_NORMALIZE_SCRIPT="${NMME_NORMALIZE_SCRIPT:-./normalize_nmme_forecast_vars.py}"
+NMME_NORMALIZE_SCRIPT="${NMME_NORMALIZE_SCRIPT:-./preprocess/normalize_nmme_forecast_vars.py}"
 
 # --------------------- IRIDL roots & models ----------------- #
 BASE_URL="https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME"

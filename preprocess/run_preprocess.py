@@ -33,8 +33,8 @@ import numpy as np
 import cftime
 from utils.config import load_config
 from utils.nmme_metadata import init_models
-from normalize_nmme_forecast_vars import normalize_forecast_dataset
-from normalize_nmme_forecast_vars import sanitize_for_write
+from preprocess.normalize_nmme_forecast_vars import normalize_forecast_dataset
+from preprocess.normalize_nmme_forecast_vars import sanitize_for_write
 from utils.nmme_io import open_local_forecast, decode_S_cftime
 
 def parse_args():
