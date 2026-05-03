@@ -29,7 +29,7 @@ def main() -> int:
         "--stages",
         nargs="+",
         default=["ingest", "preprocess", "products", "pycpt"],
-        help="Stages to run in order",
+        help="Stages to run in order (ingest preprocess products pycpt publish)",
     )
     p.add_argument(
         "--init",
@@ -46,6 +46,11 @@ def main() -> int:
         "--products-dry-run",
         action="store_true",
         help="Run products stage without writing plots or NetCDF output",
+    )
+    p.add_argument(
+        "--publish-dry-run",
+        action="store_true",
+        help="Run publish stage without SSH/SCP side effects",
     )
 
     # ---------- PyCPT passthrough flags ----------
@@ -213,6 +218,23 @@ def main() -> int:
             cmd.append("--use-mamba")
 
         stage_cmds["pycpt"] = cmd
+
+    # ---------- Publish ----------
+    if "publish" in args.stages:
+        if args.system != "nmme":
+            raise RuntimeError("publish stage is only supported for --system nmme")
+
+        cfg_q = shlex.quote(args.config)
+        init_q = shlex.quote(init_str)
+        env_prefix = f"NMME_CONFIG={cfg_q}"
+        if args.publish_dry_run:
+            env_prefix += " PUBLISH_DRY_RUN=1"
+
+        stage_cmds["publish"] = [
+            "bash",
+            "-lc",
+            f"{env_prefix} publish/filetransfer2web.sh {init_q}",
+        ]
 
     # ---------------- Execute ----------------
     for i, stage in enumerate(args.stages, start=1):

@@ -117,6 +117,16 @@ pipeline:
     climo_output_dir: /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020
     climo_start_year: 1991
     climo_end_year: 2020
+  publish:
+    enabled: true
+    dry_run: false
+    copy_monthly: true
+    copy_seasonal: true
+    copy_latest: true
+    update_html: true
+    dest_host: somclass23.som.nor.ou.edu
+    dest_dir: /home/kpegion/http/nmme/forecasts
+    ssh_key: ~/.ssh/id_ed25519
 
 
 # ------------------------------------------------------------
