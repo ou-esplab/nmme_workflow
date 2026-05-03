@@ -42,7 +42,7 @@ Project utilities are organized under `utils/`:
 Recommended install (reproducible from known-good environment):
 
 ```bash
-conda create -n nmme_workflow_env --file environment.from-pycpt-2.8.2.lock.txt
+conda create -n nmme_workflow_env --file environment.from-pycpt-2.8.2.yml
 conda activate nmme_workflow_env
 ```
 
@@ -93,6 +93,8 @@ python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 ```
 
 This runs the full end-to-end pipeline: ingest, products, pycpt.
+Default stages are: ingest, preprocess, products, pycpt.
+To include publish, add it explicitly in --stages.
 
 ### SFS AWS Forecast Ingest (prec, tref, sst)
 
@@ -148,32 +150,33 @@ reforecast files can be incorporated into the climo update in the same run.
 SST mapping detail: SFS SST is sourced from
 `ocn_monthly.zarr` variable `SST`.
 
-Legacy wrapper (deprecated, still available):
-
-```bash
-./nmme_pipeline.sh
-```
-
 ### Example
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 ```
 
-### Dry-Run Mode (NEW)
+### Dry-Run Mode
 
-Use `--dry-run` to validate inputs and processing steps without requiring `cpt` binary or producing CPT outputs:
+Validate stages without side effects using runner flags.
+
+PyCPT dry-run (skips CPT execution):
 
 ```bash
-./pycpt-seasonal_rt.py --dry-run confignmme.yaml 202601 --only Mexico
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages pycpt --pycpt-dry-run
 ```
 
-Dry-run behavior:
-- Loads and subsets predictand and hindcast data for region
-- Computes sub-seasonal ensemble means
-- Transforms inputs into CPTv10 candidate arrays (`X_train_v10`, `Y_v10`)
-- Skips `CPT` execution
-- Exits with status `0` if all checks pass
+Products dry-run (does not write products):
+
+```bash
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages products --products-dry-run
+```
+
+Publish dry-run (no SSH/SCP side effects):
+
+```bash
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages publish --publish-dry-run
+```
 
 ---
 
@@ -214,6 +217,93 @@ A successful run ends with:
 ```
 
 Any earlier error indicates configuration or data issues.
+
+---
+
+## Automated Execution via Cron
+
+To run the workflow automatically on a schedule, use the wrapper script with cron's flock-based mutual exclusion locking to prevent concurrent runs.
+
+### Wrapper Script
+
+The script [scripts/run_nmme_workflow.sh](scripts/run_nmme_workflow.sh) provides:
+- File-based locking (flock) to prevent overlapping executions
+- Unified CLI + cron support via `--cron` flag
+- Automatic logging to `logs/YYYYMMDD_HHMMSS/workflow.log`
+- Safe fallback on lock contention (skips run if previous still active)
+
+### Usage Examples
+
+**Test CLI execution:**
+
+```bash
+cd /home/kpegion/projects/nmme_workflow
+./scripts/run_nmme_workflow.sh --init 202602
+```
+
+**With options:**
+
+```bash
+# Full pipeline with publish
+./scripts/run_nmme_workflow.sh --init 202602 --stages ingest preprocess products pycpt publish
+
+# Dry-run
+./scripts/run_nmme_workflow.sh --init 202602 --products-dry-run
+```
+
+### Crontab Setup
+
+Add to your user's crontab:
+
+```bash
+crontab -e
+```
+
+Example cron entries (adjust time and init dates to your schedule):
+
+```bash
+# Run monthly on the 15th at 03:10 UTC (mid-month forecast)
+10 3 15 * * /home/kpegion/projects/nmme_workflow/scripts/run_nmme_workflow.sh --init 202602 --cron 2>/dev/null
+
+# Run on the 1st of each month at 02:30 UTC (early-month forecast)
+30 2 1 * * /home/kpegion/projects/nmme_workflow/scripts/run_nmme_workflow.sh --init 202603 --cron 2>/dev/null
+
+# With publish stage
+10 3 15 * * /home/kpegion/projects/nmme_workflow/scripts/run_nmme_workflow.sh --init 202602 --stages ingest preprocess products pycpt publish --cron 2>/dev/null
+```
+
+### How Locking Works
+
+`flock -n /path/to/.nmme.lock` ensures only one workflow instance runs at a time:
+
+- If the lock is available: acquires it, runs the workflow, releases lock on exit
+- If locked (previous run still active): returns immediately with exit code 1, cron logs it silently (via `2>/dev/null`)
+
+This prevents concurrent runs from corrupting output files or doubling resource usage if the previous month's ~75-minute workflow overlaps with the next scheduled start.
+
+### Cron Log Monitoring
+
+Logs are written to:
+```
+logs/YYYYMMDD_HHMMSS/workflow.log
+```
+
+Monitor recent runs:
+
+```bash
+ls -lrt logs/
+tail -f logs/$(ls -t logs/ | head -1)/workflow.log
+```
+
+Check cron execution history (may vary by system):
+
+```bash
+# macOS
+log show --predicate 'process == "cron"' --last 1h
+
+# Linux (if syslog enabled)
+grep CRON /var/log/syslog | tail -20
+```
 
 ---
 
