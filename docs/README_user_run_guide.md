@@ -307,6 +307,71 @@ grep CRON /var/log/syslog | tail -20
 
 ---
 
+## Preparing Static Files
+
+The NMME workflow requires two types of precomputed **static files** (climatology and tercile thresholds) before running the products stage. These are one-time setup files or periodic refreshes when data/models change.
+
+### Static Files Overview
+
+1. **Climatology Files**: Baseline climate statistics for each model/variable
+   - Location: `/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020/`
+   - Naming: `{model}.{var}_{level}.clim.1991-2020.nc`
+
+2. **Tercile Threshold Files**: Tercile percentiles (33rd, 66th) for tercile probability maps
+   - Location: `tercile_thresholds/`
+   - Naming: `{model}.{var}.{season}.terciles.1991-2020.nc`
+
+### Check Static Files Status
+
+Before running any workflow, verify static files are available and valid:
+
+```bash
+python scripts/check_static_files.py --config confignmme.yaml \
+  --climatology-root /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020 \
+  --tercile-root tercile_thresholds --verbose
+```
+
+Output shows which files are valid (✓) and which are missing/invalid (✗).
+
+### Generate Static Files (One-Time Setup)
+
+If static files are missing, generate them using the runner:
+
+```bash
+# Step 1: Generate climatology files (~15-30 minutes)
+./scripts/run_nmme_workflow.sh --stages climatology
+
+# Step 2: Precompute tercile thresholds (~5-10 minutes)
+./scripts/run_nmme_workflow.sh --stages terciles
+
+# Step 3: Verify completion
+python scripts/check_static_files.py --config confignmme.yaml \
+  --climatology-root /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020 \
+  --tercile-root tercile_thresholds
+```
+
+### Refresh Static Files
+
+If reforecasts update or models/regions change, refresh the static files:
+
+```bash
+# Skip checks and force regeneration of climatology
+./scripts/run_nmme_workflow.sh --stages climatology --climatology-skip-check
+
+# Then regenerate terciles (which depend on climatology)
+./scripts/run_nmme_workflow.sh --stages terciles
+```
+
+### Normal Workflow (After Setup)
+
+Once static files are ready, just run normal stages (products, pycpt, etc.). Cached static files will be used automatically:
+
+```bash
+./scripts/run_nmme_workflow.sh --init 202605 --stages products pycpt
+```
+
+---
+
 ## Adding a New Model
 
 To add a new seasonal forecast model to the workflow, follow these steps:

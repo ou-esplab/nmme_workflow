@@ -29,7 +29,23 @@ def main() -> int:
         "--stages",
         nargs="+",
         default=["ingest", "preprocess", "products", "pycpt"],
-        help="Stages to run in order (ingest preprocess products pycpt publish)",
+        help="Stages to run in order. Optional static: climatology terciles. Main: ingest preprocess products pycpt publish",
+    )
+    p.add_argument(
+        "--climatology-root",
+        type=str,
+        default="/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020",
+        help="Root directory for climatology files",
+    )
+    p.add_argument(
+        "--climatology-skip-check",
+        action="store_true",
+        help="Skip validation check before running climatology stage",
+    )
+    p.add_argument(
+        "--tercile-skip-check",
+        action="store_true",
+        help="Skip validation check before running terciles stage",
     )
     p.add_argument(
         "--init",
@@ -134,6 +150,29 @@ def main() -> int:
                             run_cmd(cmd, str(log_path))
                         else:
                             print(f"[SKIP] Tercile file exists and is valid: {tercile_path}")
+
+    # ---------- Climatology (optional static stage) ----------
+    if "climatology" in args.stages and args.system == "nmme":
+        stage_cmds["climatology"] = [
+            "python",
+            "static/make_sfs_climo_from_reforecast.py",
+            "--model", "NOAA-SFS",
+            "--local-var", "prec",
+            "--output-file", 
+            f"{args.climatology_root}/NOAA-SFS.prec_sfc.clim.1991-2020.nc",
+        ]
+
+    # ---------- Terciles (optional static stage) ----------
+    if "terciles" in args.stages and args.system == "nmme":
+        cmd = [
+            "python",
+            "static/precompute_tercile_thresholds.py",
+            "--config", args.config,
+            "--hindcast-root", "/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full",
+            "--sfs-hindcast-root", "/data/esplab/nmme-backup/NOAA-SFS/reforecast",
+            "--outdir", "tercile_thresholds",
+        ]
+        stage_cmds["terciles"] = cmd
 
     # ---------- Ingest ----------
     if "ingest" in args.stages:
