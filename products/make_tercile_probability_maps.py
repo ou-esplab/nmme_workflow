@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", default="confignmme.yaml", help="Path to config YAML")
     p.add_argument(
         "--seasons",
-        default="MAM",
+        default="ALL",
         help="Comma-separated seasons from {MAM,AMJ,MJJ,JJA,ASO,NDJ}; use ALL for all",
     )
     p.add_argument(

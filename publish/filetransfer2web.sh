@@ -52,6 +52,14 @@ run_cmd() {
   fi
 }
 
+to_bool01() {
+  local val="${1:-0}"
+  case "${val,,}" in
+    1|true|yes|on) echo "1" ;;
+    *) echo "0" ;;
+  esac
+}
+
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 YYYYMM" >&2
   exit 2
@@ -74,6 +82,20 @@ PUBLISH_UPDATE_HTML="${PUBLISH_UPDATE_HTML:-$(cfg_get 'pipeline.publish.update_h
 PUBLISH_DEST_HOST="${PUBLISH_DEST_HOST:-$(cfg_get 'pipeline.publish.dest_host' 'somclass23.som.nor.ou.edu')}"
 PUBLISH_DEST_DIR="${PUBLISH_DEST_DIR:-$(cfg_get 'pipeline.publish.dest_dir' '/home/kpegion/http/nmme/forecasts')}"
 PUBLISH_SSH_KEY="${PUBLISH_SSH_KEY:-$(cfg_get 'pipeline.publish.ssh_key' '~/.ssh/id_ed25519')}"
+PUBLISH_COPY_STATIC_ONCE="${PUBLISH_COPY_STATIC_ONCE:-$(cfg_get 'pipeline.publish.copy_static_once' '1')}"
+PUBLISH_COPY_STATIC_FORCE="${PUBLISH_COPY_STATIC_FORCE:-$(cfg_get 'pipeline.publish.copy_static_force' '0')}"
+PUBLISH_STATIC_CLIMO_SRC="${PUBLISH_STATIC_CLIMO_SRC:-$(cfg_get 'pipeline.publish.static_climatology_source' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
+PUBLISH_STATIC_TERCILES_SRC="${PUBLISH_STATIC_TERCILES_SRC:-$(cfg_get 'pipeline.publish.static_terciles_source' '/data/esplab/shared/model/initialized/nmme/terciles/1991-2020')}"
+PUBLISH_HINDCASTS_DEST_DIR="${PUBLISH_HINDCASTS_DEST_DIR:-$(cfg_get 'pipeline.publish.hindcasts_dest_dir' '')}"
+
+PUBLISH_ENABLED="$(to_bool01 "$PUBLISH_ENABLED")"
+PUBLISH_DRY_RUN="$(to_bool01 "$PUBLISH_DRY_RUN")"
+PUBLISH_COPY_MONTHLY="$(to_bool01 "$PUBLISH_COPY_MONTHLY")"
+PUBLISH_COPY_SEASONAL="$(to_bool01 "$PUBLISH_COPY_SEASONAL")"
+PUBLISH_COPY_LATEST="$(to_bool01 "$PUBLISH_COPY_LATEST")"
+PUBLISH_UPDATE_HTML="$(to_bool01 "$PUBLISH_UPDATE_HTML")"
+PUBLISH_COPY_STATIC_ONCE="$(to_bool01 "$PUBLISH_COPY_STATIC_ONCE")"
+PUBLISH_COPY_STATIC_FORCE="$(to_bool01 "$PUBLISH_COPY_STATIC_FORCE")"
 
 MONTHLY_ROOT="${NMME_MONTHLY_ROOT:-$(cfg_get 'data.output.nmme_monthly' '/data/esplab/shared/model/initialized/nmme/forecast/monthly')}"
 SEASONAL_ROOT="${NMME_SEASONAL_ROOT:-$(cfg_get 'data.output.nmme_seasonal' '/data/esplab/shared/model/initialized/nmme/forecast/seasonal')}"
@@ -88,6 +110,18 @@ ssh_key_expanded="${PUBLISH_SSH_KEY/#\~/$HOME}"
 
 sourceDirMon="${MONTHLY_ROOT}/${fcstdate}"
 sourceDirSeas="${SEASONAL_ROOT}/${fcstdate}"
+
+if [[ -z "$PUBLISH_HINDCASTS_DEST_DIR" ]]; then
+  if [[ "$PUBLISH_DEST_DIR" == */forecasts ]]; then
+    PUBLISH_HINDCASTS_DEST_DIR="${PUBLISH_DEST_DIR%/forecasts}/hindcasts"
+  else
+    PUBLISH_HINDCASTS_DEST_DIR="${PUBLISH_DEST_DIR%/}/hindcasts"
+  fi
+fi
+
+HINDCASTS_CLIMO_DEST="${PUBLISH_HINDCASTS_DEST_DIR%/}/climatology/monthly/1991-2020"
+HINDCASTS_TERCILES_DEST="${PUBLISH_HINDCASTS_DEST_DIR%/}/terciles/seasonal/1991-2020"
+HINDCASTS_MARKER="${PUBLISH_HINDCASTS_DEST_DIR%/}/.static_publish_complete_1991-2020"
 
 if [[ -f "/home/${USER}/miniconda3/etc/profile.d/conda.sh" ]]; then
   . "/home/${USER}/miniconda3/etc/profile.d/conda.sh"
@@ -107,35 +141,35 @@ if (( timeout == 0 )); then
 fi
 
 run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
-  "mkdir -p ${PUBLISH_DEST_DIR}/images/${fcstdate} ${PUBLISH_DEST_DIR}/images/Latest ${PUBLISH_DEST_DIR}/data/${fcstdate}"
-
-shopt -s nullglob
+  "mkdir -p \
+    ${PUBLISH_DEST_DIR}/monthly/${fcstdate}/images \
+    ${PUBLISH_DEST_DIR}/monthly/${fcstdate}/data \
+    ${PUBLISH_DEST_DIR}/monthly/images/Latest \
+    ${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/images \
+    ${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/data \
+    ${PUBLISH_DEST_DIR}/seasonal/images/Latest"
 
 if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
-  image_files=("${sourceDirMon}/images/"*)
-  data_files=("${sourceDirMon}/data/"*)
-  if (( ${#image_files[@]} > 0 )); then
-    run_cmd scp -i "${ssh_key_expanded}" "${image_files[@]}" "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/"
+  if [[ -d "${sourceDirMon}/images" ]]; then
+    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirMon}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/monthly/${fcstdate}/images/"
     if [[ "$PUBLISH_COPY_LATEST" == "1" ]]; then
-      run_cmd scp -i "${ssh_key_expanded}" "${image_files[@]}" "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/Latest/"
+      run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirMon}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/monthly/images/Latest/"
     fi
   fi
-  if (( ${#data_files[@]} > 0 )); then
-    run_cmd scp -i "${ssh_key_expanded}" "${data_files[@]}" "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/data/${fcstdate}/"
+  if [[ -d "${sourceDirMon}/data" ]]; then
+    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirMon}/data/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/monthly/${fcstdate}/data/"
   fi
 fi
 
 if [[ "$PUBLISH_COPY_SEASONAL" == "1" ]]; then
-  image_files=("${sourceDirSeas}/images/"*)
-  data_files=("${sourceDirSeas}/data/"*)
-  if (( ${#image_files[@]} > 0 )); then
-    run_cmd scp -i "${ssh_key_expanded}" "${image_files[@]}" "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/"
+  if [[ -d "${sourceDirSeas}/images" ]]; then
+    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/images/"
     if [[ "$PUBLISH_COPY_LATEST" == "1" ]]; then
-      run_cmd scp -i "${ssh_key_expanded}" "${image_files[@]}" "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/Latest/"
+      run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/seasonal/images/Latest/"
     fi
   fi
-  if (( ${#data_files[@]} > 0 )); then
-    run_cmd scp -i "${ssh_key_expanded}" "${data_files[@]}" "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/data/${fcstdate}/"
+  if [[ -d "${sourceDirSeas}/data" ]]; then
+    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/data/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/data/"
   fi
 fi
 
@@ -146,4 +180,40 @@ if [[ "$PUBLISH_UPDATE_HTML" == "1" ]]; then
   run_cmd python3 "${script_dir}/updatehtmldates.py" --date "${fcstdate}" --input "${local_in}" --output "${local_out}"
   run_cmd scp -i "${ssh_key_expanded}" "${local_out}" "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/forecasts.html"
   run_cmd rm -f "${local_in}" "${local_out}"
+fi
+
+if [[ "$PUBLISH_COPY_STATIC_ONCE" == "1" ]]; then
+  static_should_copy="1"
+
+  if [[ "$PUBLISH_COPY_STATIC_FORCE" != "1" ]]; then
+    if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
+      echo "[DRY-RUN] ssh -i ${ssh_key_expanded} ${PUBLISH_DEST_HOST} test -f ${HINDCASTS_MARKER}"
+      echo "[INFO] dry-run mode cannot verify marker existence; assuming static copy will run"
+    else
+      if ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "test -f '${HINDCASTS_MARKER}'"; then
+        static_should_copy="0"
+      fi
+    fi
+  fi
+
+  if [[ "$static_should_copy" == "1" ]]; then
+    if [[ ! -d "$PUBLISH_STATIC_CLIMO_SRC" ]]; then
+      echo "ERROR: static climatology source does not exist: ${PUBLISH_STATIC_CLIMO_SRC}" >&2
+      exit 1
+    fi
+    if [[ ! -d "$PUBLISH_STATIC_TERCILES_SRC" ]]; then
+      echo "ERROR: static terciles source does not exist: ${PUBLISH_STATIC_TERCILES_SRC}" >&2
+      exit 1
+    fi
+
+    echo "[INFO] publishing static climatology once to ${HINDCASTS_CLIMO_DEST}/"
+    echo "[INFO] publishing static terciles once to ${HINDCASTS_TERCILES_DEST}/"
+    run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
+      "mkdir -p ${HINDCASTS_CLIMO_DEST} ${HINDCASTS_TERCILES_DEST}"
+    run_cmd scp -r -i "${ssh_key_expanded}" "${PUBLISH_STATIC_CLIMO_SRC}/." "${PUBLISH_DEST_HOST}:${HINDCASTS_CLIMO_DEST}/"
+    run_cmd scp -r -i "${ssh_key_expanded}" "${PUBLISH_STATIC_TERCILES_SRC}/." "${PUBLISH_DEST_HOST}:${HINDCASTS_TERCILES_DEST}/"
+    run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "touch '${HINDCASTS_MARKER}'"
+  else
+    echo "[INFO] static hindcast publish already completed; skipping (set copy_static_force=true to recopy)"
+  fi
 fi
