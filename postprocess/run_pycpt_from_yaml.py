@@ -16,6 +16,11 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+# Ensure project root is importable when invoked via runner/CLI.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from utils.config import load_config, get_region, resolve_models
 from utils.exec import (
     build_pycpt_cmd,
@@ -72,7 +77,7 @@ def main() -> int:
             models = list(args.models)
 
         cmd = build_pycpt_cmd(
-            script="./pycpt-seasonal_rt.py",
+            script=str(PROJECT_ROOT / "postprocess" / "pycpt-seasonal_rt.py"),
             config=cfg_path,
             fcstdate=args.fcstdate,
             region_name=region["name"],

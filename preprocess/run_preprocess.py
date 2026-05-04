@@ -70,12 +70,21 @@ def finalize_preprocess_schema(ds: xr.Dataset) -> xr.Dataset:
         if legacy in ds.coords:
             ds = ds.drop_vars(legacy, errors="ignore")
 
-    # --- Enforce final invariant ---
+    # --- Remove unexpected singleton dims (e.g., pressure metadata axes) ---
     expected = {"member", "lead", "lat", "lon"}
+    for dim_name in list(ds.dims):
+        if dim_name in expected:
+            continue
+        if ds.sizes.get(dim_name, 0) == 1:
+            ds = ds.isel({dim_name: 0}, drop=True)
+
+    # --- Enforce final invariant ---
     if set(ds.dims) != expected:
+        extra_dims = {d: int(ds.sizes[d]) for d in ds.dims if d not in expected}
         raise RuntimeError(
             f"Preprocess schema violation. "
-            f"Expected dims {expected}, got {set(ds.dims)}"
+            f"Expected dims {expected}, got {set(ds.dims)}; "
+            f"unexpected dims/sizes={extra_dims}"
         )
 
     # Reorder dimensions to canonical order: member, lead, lat, lon
@@ -227,7 +236,7 @@ def add_months_cftime(dt, months):
     month = (dt.month - 1 + months) % 12 + 1
     return type(dt)(year, month, 1)
 
-def construct_valid(ds: xr.Dataset) -> xr.Dataset:
+def construct_valid(ds: xr.Dataset, init_yyyymm: str | None = None) -> xr.Dataset:
     
     """
     Construct a 'valid' coordinate from init time + lead.
@@ -297,6 +306,7 @@ def construct_valid(ds: xr.Dataset) -> xr.Dataset:
     # type (respecting 360-day calendar when present).
     if not isinstance(init_val, (cftime.datetime, cftime.Datetime360Day)):
         # Attempt CF-style numeric decode when units present on the init coord
+        decoded_init = None
         try:
             units = ds[init_coord].attrs.get("units") if init_coord in ds.coords else None
             calendar = ds[init_coord].attrs.get("calendar", "standard") if init_coord in ds.coords else "standard"
@@ -304,24 +314,37 @@ def construct_valid(ds: xr.Dataset) -> xr.Dataset:
                 calendar = "360_day"
             if units is not None:
                 # num2date handles scalars or arrays
-                init_val = cftime.num2date(float(init_val), units, calendar=calendar)
+                decoded_init = cftime.num2date(float(init_val), units, calendar=calendar)
         except Exception:
-            init_val = None
+            decoded_init = None
+
+        init_val = decoded_init
 
     if init_val is None:
-        # Final fallback: convert via pandas then to cftime
-        ts = pd.Timestamp(ds[init_coord].values if init_coord in ds.coords else init_val)
-        # Choose cftime type based on declared calendar (if any)
-        calendar = None
-        if init_coord in ds.coords:
-            calendar = ds[init_coord].attrs.get("calendar")
-        if calendar == "360":
-            calendar = "360_day"
-
-        if calendar and "360" in calendar:
-            init_val = cftime.Datetime360Day(ts.year, ts.month, ts.day)
+        # Preferred fallback for legacy numeric S without CF units.
+        if init_yyyymm and len(init_yyyymm) == 6 and init_yyyymm.isdigit():
+            year = int(init_yyyymm[:4])
+            month = int(init_yyyymm[4:6])
+            calendar = ds[init_coord].attrs.get("calendar") if init_coord in ds.coords else None
+            if calendar == "360":
+                calendar = "360_day"
+            if calendar and "360" in str(calendar):
+                init_val = cftime.Datetime360Day(year, month, 1)
+            else:
+                init_val = cftime.DatetimeGregorian(year, month, 1)
         else:
-            init_val = cftime.DatetimeGregorian(ts.year, ts.month, ts.day)
+            # Final fallback: convert via pandas then to cftime
+            ts = pd.Timestamp(init_val)
+            calendar = None
+            if init_coord in ds.coords:
+                calendar = ds[init_coord].attrs.get("calendar")
+            if calendar == "360":
+                calendar = "360_day"
+
+            if calendar and "360" in str(calendar):
+                init_val = cftime.Datetime360Day(ts.year, ts.month, ts.day)
+            else:
+                init_val = cftime.DatetimeGregorian(ts.year, ts.month, ts.day)
 
     # Now build 'valid' values using cftime-aware month addition
     for l in leads:
@@ -412,7 +435,7 @@ def main() -> int:
             # ----------------------------------------------------------
             # Construct valid coordinate
             # ----------------------------------------------------------
-            ds = construct_valid(ds)
+            ds = construct_valid(ds, args.init)
 
             # Drop init dimension after valid has been constructed
             if "S" in ds.dims:

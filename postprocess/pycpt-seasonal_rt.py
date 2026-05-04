@@ -10,10 +10,15 @@ Run CPT seasonal CCA using:
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 import argparse
 import datetime as dt
 import xarray as xr
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils import nmme_pycpt_utils as U
 from cptcore.functional import cca
@@ -114,19 +119,27 @@ def main() -> int:
     for model in models_used:
         base = model_base_map.get(model, model)
 
-        hc, _ = U.load_model_local_with_patterns(
-            root=root,
-            model_base=base,
-            init_yyyymm=fcst_yyyymm,
-            var=model_var,
-            patterns=patterns,
-        )
+        try:
+            hc, _ = U.load_model_local_with_patterns(
+                root=root,
+                model_base=base,
+                init_yyyymm=fcst_yyyymm,
+                var=model_var,
+                patterns=patterns,
+            )
+        except Exception as exc:
+            print(f"[WARN] Skipping model {model}: hindcast load failed ({exc})")
+            continue
 
-        selected_L = U.select_lead(
-            fdate=fdate,
-            season=region["season"],
-            L_coord=hc["L"].values,
-        )
+        try:
+            selected_L = U.select_lead(
+                fdate=fdate,
+                season=region["season"],
+                L_coord=hc["L"].values,
+            )
+        except Exception as exc:
+            print(f"[WARN] Skipping model {model}: lead selection failed ({exc})")
+            continue
 
         hc_L = hc.sel(L=selected_L)
 
@@ -151,6 +164,11 @@ def main() -> int:
 
         X_list.append(hc_emean)
         model_names.append(model)
+
+    if not X_list:
+        raise RuntimeError(
+            f"No usable hindcast models for region {region['name']} and init {fcst_yyyymm}"
+        )
 
     # ---- Stack models into C axis ----
     X_train = xr.concat(X_list, dim="C")

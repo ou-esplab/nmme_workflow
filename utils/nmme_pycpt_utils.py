@@ -198,11 +198,37 @@ def open_netcdf_variable(path_glob: Path, var: str) -> xr.DataArray:
     if not files:
         raise FileNotFoundError(f"No NetCDF files found matching: {path_glob}")
 
+    # Validate inputs first. Some archives can contain non-NetCDF files with
+    # .nc suffix; skip unreadable files rather than aborting all regions.
+    valid_files = []
+    skipped_files = []
+    for fp in files:
+        try:
+            xr.open_dataset(fp, decode_times=False, engine="netcdf4").close()
+            valid_files.append(fp)
+        except Exception as exc:
+            skipped_files.append((fp, exc))
+
+    if skipped_files:
+        for fp, exc in skipped_files:
+            print(f"[WARN] Skipping unreadable NetCDF file: {fp} ({exc})")
+
+    if not valid_files:
+        raise RuntimeError(
+            f"No readable NetCDF files found for pattern: {path_glob}; "
+            f"skipped={len(skipped_files)}"
+        )
+
     # Always open safely first
     ds = (
-        xr.open_mfdataset(files, combine="by_coords", decode_times=False)
-        if len(files) > 1
-        else xr.open_dataset(files[0], decode_times=False)
+        xr.open_mfdataset(
+            valid_files,
+            combine="by_coords",
+            decode_times=False,
+            engine="netcdf4",
+        )
+        if len(valid_files) > 1
+        else xr.open_dataset(valid_files[0], decode_times=False, engine="netcdf4")
     )
 
     # Decode CF time *explicitly* and *only* for valid time coords
@@ -213,7 +239,7 @@ def open_netcdf_variable(path_glob: Path, var: str) -> xr.DataArray:
 
     if var not in ds.data_vars:
         raise KeyError(
-            f"Variable '{var}' not found in {files[0]} "
+            f"Variable '{var}' not found in {valid_files[0]} "
             f"(vars={list(ds.data_vars)})"
         )
 

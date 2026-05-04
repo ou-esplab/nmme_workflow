@@ -211,29 +211,38 @@ def main() -> int:
             if args.products_dry_run:
                 cmd1.append("--dry-run")
 
-            cmd2 = [
-                "python",
-                "products/make_tercile_probability_maps.py",
-                "--init",
-                init_str,
-                "--config",
-                args.config,
-            ]
-
-            stage_cmds["products"] = [cmd1, cmd2]
-        else:
-            suffix = " --dry-run" if args.products_dry_run else ""
-            stage_cmds["products"] = [
-                ["bash", "-lc", f"products/makefcsts.sh {init_str}{suffix}"],
-                [
+            if args.products_dry_run:
+                # Step 2 requires forecast files written by step 1.
+                # In dry-run mode step 1 does not write outputs, so skip step 2.
+                stage_cmds["products"] = [cmd1]
+            else:
+                cmd2 = [
                     "python",
                     "products/make_tercile_probability_maps.py",
                     "--init",
                     init_str,
                     "--config",
                     args.config,
-                ],
-            ]
+                ]
+                stage_cmds["products"] = [cmd1, cmd2]
+        else:
+            suffix = " --dry-run" if args.products_dry_run else ""
+            if args.products_dry_run:
+                stage_cmds["products"] = [
+                    ["bash", "-lc", f"products/makefcsts.sh {init_str}{suffix}"],
+                ]
+            else:
+                stage_cmds["products"] = [
+                    ["bash", "-lc", f"products/makefcsts.sh {init_str}{suffix}"],
+                    [
+                        "python",
+                        "products/make_tercile_probability_maps.py",
+                        "--init",
+                        init_str,
+                        "--config",
+                        args.config,
+                    ],
+                ]
 
     # ---------- PyCPT ----------
     if "pycpt" in args.stages:

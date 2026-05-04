@@ -5,6 +5,9 @@ set -Eeuo pipefail
 shopt -s extglob
 export LC_ALL=C
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # -------------------------- Logger -------------------------- #
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
@@ -86,7 +89,7 @@ SFS_VARS="${SFS_VARS:-$(cfg_get 'pipeline.sfs.variables' 'prec tref sst')}"
 # Optional SFS reforecast sync (all vars in SFS_VARS)
 SFS_REFORECAST_ENABLED="${SFS_REFORECAST_ENABLED:-$(cfg_get 'pipeline.sfs.reforecast_enabled' '1')}"
 SFS_REFORECAST_DRY_RUN="${SFS_REFORECAST_DRY_RUN:-$(cfg_get 'pipeline.sfs.reforecast_dry_run' '0')}"
-SFS_REFORECAST_SCRIPT="${SFS_REFORECAST_SCRIPT:-$(cfg_get 'pipeline.sfs.reforecast_script' './download_sfs_reforecast_prec.sh')}"
+SFS_REFORECAST_SCRIPT="${SFS_REFORECAST_SCRIPT:-$(cfg_get 'pipeline.sfs.reforecast_script' "${SCRIPT_DIR}/download_sfs_reforecast_prec.sh")}"
 SFS_REFORECAST_ROOT="${SFS_REFORECAST_ROOT:-$(cfg_get 'pipeline.sfs.reforecast_root' 's3://noaa-oar-sfsdev-pds/experiments/beta1/reforecast')}"
 SFS_REFORECAST_MONTHS="${SFS_REFORECAST_MONTHS:-$(cfg_get 'pipeline.sfs.reforecast_months' '')}"
 SFS_REFORECAST_START_YEAR="${SFS_REFORECAST_START_YEAR:-$(cfg_get 'pipeline.sfs.reforecast_start_year' '1991')}"
@@ -96,7 +99,7 @@ SFS_REFORECAST_MAX_DOWNLOADS="${SFS_REFORECAST_MAX_DOWNLOADS:-$(cfg_get 'pipelin
 # Optional SFS climatology refresh from local reforecast files (per-var)
 SFS_CLIMO_ENABLED="${SFS_CLIMO_ENABLED:-$(cfg_get 'pipeline.sfs.climo_enabled' '1')}"
 SFS_CLIMO_PYTHON="${SFS_CLIMO_PYTHON:-$(cfg_get 'pipeline.sfs.climo_python' 'python3')}"
-SFS_CLIMO_SCRIPT="${SFS_CLIMO_SCRIPT:-$(cfg_get 'pipeline.sfs.climo_script' './make_sfs_climo_from_reforecast.py')}"
+SFS_CLIMO_SCRIPT="${SFS_CLIMO_SCRIPT:-$(cfg_get 'pipeline.sfs.climo_script' "${PROJECT_ROOT}/static/make_sfs_climo_from_reforecast.py")}"
 SFS_CLIMO_INPUT_DIR="${SFS_CLIMO_INPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_input_dir' "${DATA_ROOT}/NOAA-SFS/reforecast/prec")}" 
 SFS_CLIMO_OUTPUT_DIR="${SFS_CLIMO_OUTPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_output_dir' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
 SFS_CLIMO_START_YEAR="${SFS_CLIMO_START_YEAR:-$(cfg_get 'pipeline.sfs.climo_start_year' '1991')}"
@@ -385,7 +388,7 @@ echo "All model updates complete."
 if [[ "$SFS_AWS_ENABLED" == "1" ]]; then
   log "SFS : running latest AWS SFS forecast ingest (vars: ${SFS_VARS})"
   for sfs_var in $SFS_VARS; do
-    if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" LOCAL_VAR="$sfs_var" ./download_sfs_forecast_latest_prec.sh; then
+    if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" LOCAL_VAR="$sfs_var" "${SCRIPT_DIR}/download_sfs_forecast_latest_prec.sh"; then
       log "SFS : WARN latest AWS SFS forecast ingest failed var=${sfs_var}; continuing"
     fi
   done
@@ -428,7 +431,7 @@ if [[ "$SFS_CLIMO_ENABLED" == "1" ]]; then
       esac
       sfs_in_dir="${DATA_ROOT}/NOAA-SFS/reforecast/${sfs_var}"
       sfs_out_file="${SFS_CLIMO_OUTPUT_DIR}/NOAA-SFS.${sfs_var}_${sfs_lev}.clim.1991-2020.nc"
-      if ! "$SFS_CLIMO_PYTHON" "$SFS_CLIMO_SCRIPT" \
+      if ! PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" "$SFS_CLIMO_PYTHON" "$SFS_CLIMO_SCRIPT" \
         --model "NOAA-SFS" \
         --local-var "$sfs_var" \
         --input-dir "$sfs_in_dir" \

@@ -4,7 +4,7 @@
 
 Preferred (exact, reproducible):
 ```bash
-conda create -n nmme_workflow_env --file environment.from-pycpt-2.8.2.lock.txt
+conda create -n nmme_workflow_env --file environment.from-pycpt-2.8.2.yml
 conda activate nmme_workflow_env
 ```
 
@@ -26,8 +26,10 @@ python3 runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM
 ```
 
 - Stages: `ingest`, `products`, `pycpt` (default runs all).
+- Stages: `ingest`, `preprocess`, `products`, `pycpt`, `publish`.
+- Default run executes: `ingest`, `preprocess`, `products`, `pycpt`.
+- `publish` is optional and must be requested explicitly with `--stages ... publish`.
 - Place your real `confignmme.yaml` here if the placeholder was created.
-- Legacy shell entry is deprecated: `./nmme_pipeline.sh` now forwards to `runners/cli.py`.
 
 ## Regression Checklist
 

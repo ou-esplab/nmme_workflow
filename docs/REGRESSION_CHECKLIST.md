@@ -39,7 +39,18 @@ Expected:
 - `CPT.x` exists in PATH.
 - Python import prints `ok`.
 
-## 2. Runner Validation: Preprocess
+## 2. Runner Validation: Ingest
+
+```bash
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages ingest
+```
+
+Expected:
+- command exits 0
+- ingest log is created under `logs/.../nmme/202601/01_ingest.log`
+- no ingest traceback
+
+## 3. Runner Validation: Preprocess
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages preprocess
@@ -49,7 +60,7 @@ Expected:
 - command exits 0
 - no preprocess invariant/normalization traceback
 
-## 3. Runner Dry-Run: PyCPT
+## 4. Runner Dry-Run: PyCPT
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages pycpt --pycpt-dry-run
@@ -59,7 +70,7 @@ Expected:
 - command exits 0
 - log path created under `logs/.../nmme/202601/`
 
-## 4. Runner Dry-Run: Products
+## 5. Runner Dry-Run: Products
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages products --products-direct --products-dry-run
@@ -69,7 +80,7 @@ Expected:
 - command exits 0
 - no plotting import errors
 
-## 5. Full Runner Workflow
+## 6. Full Runner Workflow
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601
@@ -79,7 +90,7 @@ Expected:
 - runner runs default stages: `ingest`, `preprocess`, `products`, `pycpt`
 - no uncaught runner exception
 
-## 6. Publish Stage Dry-Run (Optional)
+## 7. Publish Stage Dry-Run (Optional)
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages publish --publish-dry-run
@@ -89,7 +100,7 @@ Expected:
 - command exits 0
 - publish log generated without SSH/SCP side effects
 
-## 7. Log Review
+## 8. Log Review
 
 Check latest stage logs:
 

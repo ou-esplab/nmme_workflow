@@ -1,7 +1,17 @@
 from typing import Iterable, Optional, Tuple
+import os
 
 import xarray as xr
 import numpy as np
+
+
+def _normalize_debug_enabled() -> bool:
+    return os.environ.get("NMME_NORMALIZE_DEBUG", "0") == "1"
+
+
+def _normalize_debug(msg: str) -> None:
+    if _normalize_debug_enabled():
+        print(msg)
 
 
 def _ordered_unique(values: Iterable[str]) -> Tuple[str, ...]:
@@ -134,6 +144,22 @@ def normalize_forecast_dataset(
     if source_var != requested_var:
         raw = raw.rename({source_var: requested_var})
 
+    # Keep only the requested variable. Some source files bundle many variables
+    # with extra pressure coordinates (for example P_01 for winds) that should
+    # not propagate into single-variable workflow outputs.
+    raw = raw[[requested_var]]
+
+    # Drop coordinate variables whose dimensions are not used by the requested
+    # variable. This prevents unrelated dimensions from remaining in the dataset.
+    var_dims = set(raw[requested_var].dims)
+    drop_coords = []
+    for coord_name in raw.coords:
+        coord_dims = set(raw.coords[coord_name].dims)
+        if coord_dims and not coord_dims.issubset(var_dims):
+            drop_coords.append(coord_name)
+    if drop_coords:
+        raw = raw.drop_vars(drop_coords, errors="ignore")
+
     # Add 'valid' coordinate if possible
     lead_dim = None
     for candidate in ["lead", "L"]:
@@ -146,7 +172,7 @@ def normalize_forecast_dataset(
         S_val = None
         if "S" in raw.coords:
             S = raw["S"].values
-            print(f"[DEBUG] 'S' coordinate value: {S}, type: {type(S)}")
+            _normalize_debug(f"[DEBUG] 'S' coordinate value: {S}, type: {type(S)}")
             # Expect S to be a cftime object or array of cftime objects
             import cftime
             # Handle array of length 1
@@ -167,12 +193,9 @@ def normalize_forecast_dataset(
 
                         # num2date accepts arrays or scalars; ensure float input
                         S_val = num2date(float(S), units, calendar=calendar)
-                        print(f"[DEBUG] Decoded numeric 'S' via cftime.num2date -> {S_val}")
+                        _normalize_debug(f"[DEBUG] Decoded numeric 'S' via cftime.num2date -> {S_val}")
                 except Exception:
                     S_val = None
-
-                if S_val is None:
-                    print(f"[ERROR] 'S' is not a cftime object: {S} (type: {type(S)})")
 
         def add_months_cftime(dt, months):
             # Handles month overflow for cftime.Datetime360Day and similar
@@ -182,11 +205,15 @@ def normalize_forecast_dataset(
         if S_val is not None:
             valid = [add_months_cftime(S_val, int(l)) for l in raw[lead_dim].values]
             raw = raw.assign_coords(valid=(lead_dim, valid))
-            print(f"[DEBUG] Added 'valid' in normalization (lead_dim={lead_dim}): {valid}")
+            _normalize_debug(f"[DEBUG] Added 'valid' in normalization (lead_dim={lead_dim}): {valid}")
         else:
-            print(f"[DEBUG] Skipped adding 'valid' in normalization: could not parse 'S' from {raw.coords}")
+            _normalize_debug(
+                f"[DEBUG] Skipped adding 'valid' in normalization: could not parse 'S' from {raw.coords}"
+            )
     else:
-        print(f"[DEBUG] Skipped adding 'valid' in normalization: no lead dimension in {raw.dims}")
+        _normalize_debug(
+            f"[DEBUG] Skipped adding 'valid' in normalization: no lead dimension in {raw.dims}"
+        )
 
     # --- Canonicalize coordinate names (avoid duplicate helper funcs) ---
     rename = {}
