@@ -19,6 +19,7 @@ SFS_CYCLE="${SFS_CYCLE:-}"
 S3_ZARR_URL="${S3_ZARR_URL:-}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-0}"
+VERBOSE="${VERBOSE:-0}"
 
 # Always set OUTDIR based on LOCAL_VAR (no fallback to 'prec')
 OUTDIR="${DATA_ROOT}/${MODEL}/${TYPE}/${LOCAL_VAR}"
@@ -26,6 +27,27 @@ MANIFEST=""
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+log_debug() {
+    if [[ "$VERBOSE" == "1" ]]; then
+        log "$@"
+    fi
+}
+
+emit_python_output() {
+    local py_text="$1"
+    local status outfile
+    if [[ "$VERBOSE" == "1" ]]; then
+        echo "$py_text"
+        return
+    fi
+
+    status="$(printf '%s\n' "$py_text" | awk -F= '/^STATUS=/{print $2; exit}')"
+    outfile="$(printf '%s\n' "$py_text" | awk -F= '/^OUTFILE=/{print $2; exit}')"
+    if [[ -n "$status" || -n "$outfile" ]]; then
+        log "SFS forecast ${LOCAL_VAR}: status=${status:-unknown} file=${outfile:-n/a}"
+    fi
 }
 
 check_python_deps() {
@@ -73,7 +95,7 @@ set_var_defaults() {
 }
 
 main() {
-    echo "DEBUG: OUTDIR=$OUTDIR LOCAL_VAR=$LOCAL_VAR REMOTE_VAR=$REMOTE_VAR ZARR_DATASET=$ZARR_DATASET"
+    log_debug "DEBUG: OUTDIR=$OUTDIR LOCAL_VAR=$LOCAL_VAR REMOTE_VAR=$REMOTE_VAR ZARR_DATASET=$ZARR_DATASET"
   command -v python3 >/dev/null 2>&1 || {
     echo "ERROR: python3 not found" >&2
     exit 1
@@ -141,9 +163,9 @@ print(f"MM={m}")
 PY
     )"
     log "DRY_RUN: latest forecast init metadata"
-    echo "$py_out"
+    emit_python_output "$py_out"
 
-        return 0
+    return 0
     fi
 
   py_out="$(python3 - "$S3_FORECAST_ROOT" "$SFS_CYCLE" "$S3_ZARR_URL" "$REMOTE_VAR" "$ZARR_DATASET" "$LOCAL_VAR" "$OUTDIR" "$MODEL" "$FORCE_OVERWRITE" <<'PY'
@@ -242,14 +264,12 @@ PY
 
   rc=${rc:-0}
   if [[ "$rc" -eq 10 ]]; then
-    log "Latest SFS forecast file already exists"
-    echo "$py_out"
+        emit_python_output "$py_out"
   elif [[ "$rc" -ne 0 ]]; then
     echo "$py_out"
     return "$rc"
   else
-        log "Downloaded latest SFS forecast ${LOCAL_VAR}"
-    echo "$py_out"
+        emit_python_output "$py_out"
   fi
 
   {

@@ -19,12 +19,24 @@ END_YEAR="${END_YEAR:-2100}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-0}"
 MAX_DOWNLOADS="${MAX_DOWNLOADS:-0}"
+VERBOSE="${VERBOSE:-0}"
 
 OUTDIR="${DATA_ROOT}/${MODEL}/${TYPE}/${LOCAL_VAR}"
 MANIFEST=""
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+emit_python_output() {
+    local py_text="$1"
+    if [[ "$VERBOSE" == "1" ]]; then
+        echo "$py_text"
+        return
+    fi
+
+    # Quiet mode: keep only summary and warnings/errors.
+    printf '%s\n' "$py_text" | awk '/^SUMMARY / || /^WARN: / || /^ERROR: / {print}'
 }
 
 check_python_deps() {
@@ -247,7 +259,7 @@ print(f"SUMMARY requested={requested} downloaded={downloaded} existing={existing
 PY
   )"
 
-  echo "$py_out"
+    emit_python_output "$py_out"
 
   {
     echo "s3_reforecast_root=${S3_REFORECAST_ROOT}"

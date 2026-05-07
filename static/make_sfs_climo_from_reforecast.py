@@ -9,6 +9,8 @@ Reference method:
 """
 
 import argparse
+import os
+import tempfile
 from pathlib import Path
 import xarray as xr
 
@@ -52,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         default=2020,
         help="Last year to include",
     )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print per-file debug details",
+    )
     return p.parse_args()
 
 
@@ -80,16 +87,21 @@ def main() -> int:
         )
 
 
-    print("[DEBUG] Loading the following files:")
+    if args.verbose:
+        print("[DEBUG] Loading the following files:")
+    else:
+        print(f"[INFO] Loading {len(files)} files from {input_dir}")
     datasets = []
     for f in files:
-        print(f"  {f}")
+        if args.verbose:
+            print(f"  {f}")
         ds_i = xr.open_dataset(f, decode_times=True)
-        # Print the 'init' coordinate if present
-        if 'init' in ds_i.coords:
-            print(f"    init: {ds_i['init'].values}")
-        else:
-            print("    [WARN] 'init' coordinate not found in file")
+        if args.verbose:
+            # Print the 'init' coordinate if present when debugging.
+            if 'init' in ds_i.coords:
+                print(f"    init: {ds_i['init'].values}")
+            else:
+                print("    [WARN] 'init' coordinate not found in file")
         datasets.append(ds_i)
 
     ds = xr.concat(datasets, dim="init")
@@ -122,11 +134,29 @@ def main() -> int:
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
     encoding = {local_var: {"zlib": True, "complevel": 1}}
-    ds_out.to_netcdf(out_file, encoding=encoding)
+    # Write to a temp file in the same directory, then atomically replace the
+    # target so that (a) a partially-written file is never visible and (b) we
+    # avoid "Permission denied" when the existing file is open elsewhere.
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=out_file.parent, prefix=f".{out_file.name}.tmp"
+    )
+    try:
+        os.close(tmp_fd)
+        ds_out.to_netcdf(tmp_path, encoding=encoding)
+        # Match group-write convention used by the rest of the climo directory.
+        os.chmod(tmp_path, 0o664)
+        os.replace(tmp_path, out_file)
+    except Exception:
+        # Clean up the temp file on failure; re-raise so the caller knows.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
     print(f"[INFO] Wrote {out_file}")
     print(f"[INFO] Months in climatology: {ds_out['month'].values.tolist()}")
-    print(f"[INFO] Output dims: {dict(ds_out.dims)}")
+    print(f"[INFO] Output dims: {dict(ds_out.sizes)}")
 
     return 0
 

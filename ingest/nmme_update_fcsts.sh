@@ -68,6 +68,19 @@ else:
 PY
 }
 
+NMME_LOG_LEVEL="${NMME_LOG_LEVEL:-$(cfg_get 'pipeline.log_level' 'info')}"
+NMME_LOG_LEVEL="$(echo "$NMME_LOG_LEVEL" | tr '[:upper:]' '[:lower:]')"
+case "$NMME_LOG_LEVEL" in
+  debug|info|warn|error) ;;
+  *) NMME_LOG_LEVEL="info" ;;
+esac
+
+log_debug() {
+  if [[ "$NMME_LOG_LEVEL" == "debug" ]]; then
+    log "$@"
+  fi
+}
+
 # Networking
 REQUEST_PAUSE=${REQUEST_PAUSE:-0.5}
 SPIDER_TIMEOUT=${SPIDER_TIMEOUT:-4}
@@ -201,9 +214,9 @@ probe_month_available() {
   local mon=$(month_name_uc "$y" "$m")
   IFS='|' read -r branch var_for_url psel <<<"$(resolve_var_and_branch "$model" "prec")"
   local url="${base}${branch}/.${var_for_url}/S/%280000%201%20${mon}%20${y}%29VALUES/"
-  log "PROBE: $model $y-$(printf '%02d' "$m") -> $url"
+  log_debug "PROBE: $model $y-$(printf '%02d' "$m") -> $url"
   if ! timeout ${HARD_TIMEOUT_PROBE}s wget --spider --timeout=$SPIDER_TIMEOUT --tries=$SPIDER_TRIES --quiet "$url"; then
-    log "MISS : $model $y-$(printf '%02d' "$m") not posted (or probe timeout)"
+    log_debug "MISS : $model $y-$(printf '%02d' "$m") not posted (or probe timeout)"
     return 1
   fi
   sleep "$REQUEST_PAUSE"
@@ -286,6 +299,15 @@ for model in "${!MODELURL[@]}"; do
   read y0 m0 <<<"$(apply_model_min_start "$model" "$win_y" "$win_m")"
   log "ADJ : window for ${model} -> ${y0}-$(printf '%02d' "$m0") .. ${curr_y}-$(printf '%02d' "$curr_m")"
 
+  model_probe_miss=0
+  model_available_months=0
+  model_attempted=0
+  model_exists=0
+  model_saved=0
+  model_small_drop=0
+  model_download_fail=0
+  model_normalize_fail=0
+
   # Per-var: compute earliest month we care about = max(window_start, next_after_latest)
   declare -A START_FOR_VAR
   for var in "${variables[@]}"; do
@@ -303,10 +325,10 @@ for model in "${!MODELURL[@]}"; do
     if (( key_v < key_w )); then vy=$y0; vm=$m0; fi
 
     if ! valid_year "$vy" || ! valid_month "$vm"; then
-      log "START: SKIP invalid per-var start model=${model} var=${var} -> y=${vy} m=${vm}"
+      log_debug "START: SKIP invalid per-var start model=${model} var=${var} -> y=${vy} m=${vm}"
       unset START_FOR_VAR["$var"]; continue
     fi
-    log "START: model=${model} var=${var} -> y=${vy} m=${vm} (window-aware)"
+    log_debug "START: model=${model} var=${var} -> y=${vy} m=${vm} (window-aware)"
     START_FOR_VAR["$var"]="${vy} ${vm}"
   done
 
@@ -318,10 +340,12 @@ for model in "${!MODELURL[@]}"; do
 
     # Probe (do not stop the whole model on a miss; just continue within the window)
     if ! probe_month_available "$model" "$y" "$m"; then
+      model_probe_miss=$((model_probe_miss+1))
       m=$((m+1)); if (( m>12 )); then m=1; y=$((y+1)); fi
       continue
     fi
-    log "OK  : $model $y-$(printf '%02d' "$m") is available"
+    model_available_months=$((model_available_months+1))
+    log_debug "OK  : $model $y-$(printf '%02d' "$m") is available"
 
     # For each var, download if this month >= var's window-aware start and file doesn't exist
     for var in "${variables[@]}"; do
@@ -333,20 +357,23 @@ for model in "${!MODELURL[@]}"; do
       printf -v mm "%02d" "$m"
       outfile="${outdir}/${var}_${model}_${y}_${mm}.nc"
       if [[ -f "$outfile" ]]; then
-        log "SKIP: exists  ${outfile}"
+        model_exists=$((model_exists+1))
+        log_debug "SKIP: exists  ${outfile}"
         continue
       fi
 
       mkdir -p "$outdir"
       url="$(build_url "$model" "$var" "$y" "$m")"
-      log "GET : [$var] $url -> $outfile"
+      model_attempted=$((model_attempted+1))
+      log_debug "GET : [$var] $url -> $outfile"
 
       # HTTPS first (bounded), then HTTP fallback (bounded)
       if ! timeout ${HARD_TIMEOUT_DOWNLOAD}s wget -q --timeout=$DL_TIMEOUT --tries=$DL_TRIES -O "$outfile" "$url"; then
         url_http="${url/https:\/\//http://}"
-        log "ALT : [$var] fallback HTTP -> $url_http"
+        log_debug "ALT : [$var] fallback HTTP -> $url_http"
         if ! timeout ${HARD_TIMEOUT_DOWNLOAD}s wget -q --timeout=$DL_TIMEOUT --tries=$DL_TRIES -O "$outfile" "$url_http"; then
           log "FAIL: [$var] download (HTTPS & HTTP) -> skipping"
+          model_download_fail=$((model_download_fail+1))
           rm -f "$outfile"
           continue
         fi
@@ -355,14 +382,15 @@ for model in "${!MODELURL[@]}"; do
       size=$(stat -c%s "$outfile" 2>/dev/null || echo 0)
       if (( size < MIN_BYTES )); then
         log "DROP: [$var] too small (${size} bytes) -> removing ${outfile}"
+        model_small_drop=$((model_small_drop+1))
         rm -f "$outfile"
         continue
       fi
 
-      log "SAVE: [$var] ${outfile} (${size} bytes)"
+      log_debug "SAVE: [$var] ${outfile} (${size} bytes)"
 
       if [[ "$var" == "h200" || "$var" == "h500" ]]; then
-        if ! "$NMME_NORMALIZE_PYTHON" "$NMME_NORMALIZE_SCRIPT" \
+        if ! PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" "$NMME_NORMALIZE_PYTHON" "$NMME_NORMALIZE_SCRIPT" \
           --file "$outfile" \
           --root "$DATA_ROOT" \
           --model "$model" \
@@ -370,10 +398,13 @@ for model in "${!MODELURL[@]}"; do
           --write
         then
           log "FAIL: [$var] normalization failed -> removing ${outfile}"
+          model_normalize_fail=$((model_normalize_fail+1))
           rm -f "$outfile"
           continue
         fi
       fi
+
+      model_saved=$((model_saved+1))
 
       sleep "$REQUEST_PAUSE"
     done
@@ -381,14 +412,21 @@ for model in "${!MODELURL[@]}"; do
     # next month within window
     m=$((m+1)); if (( m>12 )); then m=1; y=$((y+1)); fi
   done
+
+  log "SUM : ${model} available_months=${model_available_months} probe_miss=${model_probe_miss} attempted=${model_attempted} saved=${model_saved} exists=${model_exists} drop_small=${model_small_drop} download_fail=${model_download_fail} normalize_fail=${model_normalize_fail}"
 done
 
-echo "All model updates complete."
+log "All model updates complete."
+
+SFS_SCRIPT_VERBOSE=0
+if [[ "$NMME_LOG_LEVEL" == "debug" ]]; then
+  SFS_SCRIPT_VERBOSE=1
+fi
 
 if [[ "$SFS_AWS_ENABLED" == "1" ]]; then
   log "SFS : running latest AWS SFS forecast ingest (vars: ${SFS_VARS})"
   for sfs_var in $SFS_VARS; do
-    if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" LOCAL_VAR="$sfs_var" "${SCRIPT_DIR}/download_sfs_forecast_latest_prec.sh"; then
+    if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" VERBOSE="$SFS_SCRIPT_VERBOSE" LOCAL_VAR="$sfs_var" "${SCRIPT_DIR}/download_sfs_forecast_latest_prec.sh"; then
       log "SFS : WARN latest AWS SFS forecast ingest failed var=${sfs_var}; continuing"
     fi
   done
@@ -404,6 +442,7 @@ if [[ "$SFS_REFORECAST_ENABLED" == "1" ]]; then
     for sfs_var in $SFS_VARS; do
       if ! DATA_ROOT="$DATA_ROOT" \
         DRY_RUN="$SFS_REFORECAST_DRY_RUN" \
+        VERBOSE="$SFS_SCRIPT_VERBOSE" \
         LOCAL_VAR="$sfs_var" \
         S3_REFORECAST_ROOT="$SFS_REFORECAST_ROOT" \
         MONTHS="$SFS_REFORECAST_MONTHS" \
@@ -429,6 +468,10 @@ if [[ "$SFS_CLIMO_ENABLED" == "1" ]]; then
         tref) sfs_lev="2m" ;;
         *) sfs_lev="sfc" ;;
       esac
+      sfs_verbose_arg=()
+      if [[ "$SFS_SCRIPT_VERBOSE" == "1" ]]; then
+        sfs_verbose_arg+=("--verbose")
+      fi
       sfs_in_dir="${DATA_ROOT}/NOAA-SFS/reforecast/${sfs_var}"
       sfs_out_file="${SFS_CLIMO_OUTPUT_DIR}/NOAA-SFS.${sfs_var}_${sfs_lev}.clim.1991-2020.nc"
       if ! PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" "$SFS_CLIMO_PYTHON" "$SFS_CLIMO_SCRIPT" \
@@ -437,7 +480,8 @@ if [[ "$SFS_CLIMO_ENABLED" == "1" ]]; then
         --input-dir "$sfs_in_dir" \
         --output-file "$sfs_out_file" \
         --start-year "$SFS_CLIMO_START_YEAR" \
-        --end-year "$SFS_CLIMO_END_YEAR"; then
+        --end-year "$SFS_CLIMO_END_YEAR" \
+        "${sfs_verbose_arg[@]}"; then
         log "SFS : WARN climo refresh failed var=${sfs_var}; continuing"
       fi
     done
