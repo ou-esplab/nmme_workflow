@@ -1,30 +1,42 @@
 #!/usr/bin/env python3
-"""Build notebook-style tercile probability maps for all configured regions.
+"""Build tercile probability products and maps for configured regions.
 
-This script uses the monthly NMME forecast anomalies produced by makefcsts and
-computes model-agreement tercile probabilities (BN/NN/AN) against hindcast
-thresholds. It then writes one 3-panel map per region-season.
+This script:
+  1) loads monthly NMME forecast anomaly fields produced by makefcsts,
+  2) computes model-agreement tercile probabilities (BN/NN/AN) against
+     hindcast tercile thresholds,
+  3) writes one NetCDF tercile-probability file per region-season-variable,
+  4) writes the original 3-panel tercile probability map,
+  5) writes additional plot products:
+       - hindcast threshold maps (T33/T66) for prec and tref
+       - most-likely tercile map for prec and tref
+       - CPT-style dominant-category map for prec and tref
+       - precip-only seasonal-total summary (mean/T33/T66)
+
+Season lead windows are determined dynamically from the initialization month.
+Assumes lead 0 corresponds to the initialization month.
 """
 
 import argparse
 import glob
-from pathlib import Path
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Iterable, Tuple
-import numpy as np
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import numpy as np
 import xarray as xr
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-
 # Ensure project root is in sys.path for module imports
-import sys
-from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from utils.config import load_config
+
 
 # Model names in forecast output -> hindcast directory names.
 MODEL_DIR_MAP = {
@@ -45,13 +57,32 @@ FORECAST_VAR_TO_TERCILE_VAR = {
 
 TERCILE_FORECAST_VARS = ("prec", "tref")
 
-SEASON_LEADS: Dict[str, Tuple[int, int]] = {
-    "MAM": (0, 3),
-    "AMJ": (1, 4),
-    "MJJ": (2, 5),
-    "JJA": (3, 6),
-    "ASO": (7, 10),
-    "NDJ": (8, 11),
+# Calendar-month definitions for target seasons.
+# Lead windows are computed dynamically from init month.
+SEASON_MONTHS: Dict[str, Tuple[int, ...]] = {
+    "MAM": (3, 4, 5),
+    "AMJ": (4, 5, 6),
+    "MJJ": (5, 6, 7),
+    "JJA": (6, 7, 8),
+    "ASO": (8, 9, 10),
+    "NDJ": (11, 12, 1),
+    "Apr-Jul": (4, 5, 6, 7),
+    "Apr-Sep": (4, 5, 6, 7, 8, 9),
+    "Oct-Jan": (10, 11, 12, 1),
+}
+
+VAR_META = {
+    "prec": {
+        "label": "Precipitation",
+        "unit": "mm/day",
+        "seasonal_total_unit": "mm/season",
+        "threshold_cmaps": ("Blues", "YlOrRd"),
+    },
+    "tref": {
+        "label": "2-m Temperature",
+        "unit": "°C",
+        "threshold_cmaps": ("Blues", "Reds"),
+    },
 }
 
 
@@ -71,18 +102,25 @@ def _to_percent_if_fraction(da: xr.DataArray, label: str) -> xr.DataArray:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Create tercile probability maps for all regions")
+    p = argparse.ArgumentParser(description="Create tercile probability products for all regions")
     p.add_argument("--init", required=True, help="Forecast init YYYYMM, e.g., 202603")
     p.add_argument("--config", default="confignmme.yaml", help="Path to config YAML")
     p.add_argument(
         "--seasons",
         default="ALL",
-        help="Comma-separated seasons from {MAM,AMJ,MJJ,JJA,ASO,NDJ}; use ALL for all",
+        help=(
+            "Comma-separated seasons from "
+            "{MAM,AMJ,MJJ,JJA,ASO,NDJ,Apr-Jul,Apr-Sep,Oct-Jan}; "
+            "use ALL for all"
+        ),
     )
     p.add_argument(
         "--outdir",
         default=None,
-        help="Optional output directory; defaults to monthly/<init>/images/tercile_probs",
+        help=(
+            "Optional image output directory; defaults to "
+            "/data/.../forecast/seasonal/<init>/images"
+        ),
     )
     p.add_argument(
         "--regions",
@@ -92,26 +130,100 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def get_season_leads(init_yyyymm: str, season: str) -> Tuple[int, int]:
+    """
+    Return (l0, l1) where l1 is exclusive, based on initialization month
+    and target season calendar months.
+
+    Assumes lead 0 corresponds to the initialization month.
+    Example:
+        init=202603, season=AMJ -> (1, 4)
+        init=202604, season=AMJ -> (0, 3)
+    """
+    if season not in SEASON_MONTHS:
+        raise ValueError(f"Unsupported season: {season}. Allowed: {list(SEASON_MONTHS)}")
+
+    init_month = int(init_yyyymm[4:])
+    target_months = tuple(SEASON_MONTHS[season])
+    n = len(target_months)
+
+    # Search up to 24 months forward to allow next-year matches.
+    for l0 in range(0, 24):
+        candidate = tuple(
+            ((init_month - 1 + l0 + k) % 12) + 1
+            for k in range(n)
+        )
+        if candidate == target_months:
+            return l0, l0 + n
+
+    raise RuntimeError(
+        f"Could not determine lead window for init={init_yyyymm}, season={season}"
+    )
+
+
 def to_0360(da: xr.DataArray) -> xr.DataArray:
     return da.assign_coords(lon=((da.lon + 360) % 360)).sortby("lon")
 
 
-def subset_region(da: xr.DataArray, lat_bounds: Tuple[float, float], lon_bounds: Tuple[float, float]) -> xr.DataArray:
+def subset_region(
+    da: xr.DataArray,
+    lat_bounds: Tuple[float, float],
+    lon_bounds: Tuple[float, float],
+) -> xr.DataArray:
     lat0, lat1 = lat_bounds
     lon0, lon1 = lon_bounds
     lon0 = (lon0 + 360) % 360
     lon1 = (lon1 + 360) % 360
-    if lon0 <= lon1:
-        return da.sel(lat=slice(min(lat0, lat1), max(lat0, lat1)), lon=slice(lon0, lon1))
 
-    # Dateline wrap case.
-    left = da.sel(lat=slice(min(lat0, lat1), max(lat0, lat1)), lon=slice(lon0, 360))
-    right = da.sel(lat=slice(min(lat0, lat1), max(lat0, lat1)), lon=slice(0, lon1))
+    lat_slice = slice(min(lat0, lat1), max(lat0, lat1))
+
+    if lon0 <= lon1:
+        return da.sel(lat=lat_slice, lon=slice(lon0, lon1))
+
+    # Dateline wrap case
+    left = da.sel(lat=lat_slice, lon=slice(lon0, 360))
+    right = da.sel(lat=lat_slice, lon=slice(0, lon1))
     return xr.concat([left, right], dim="lon")
 
 
-def load_forecast(init_yyyymm: str, out_root: Path) -> xr.Dataset:
-    def _load(var):
+def normalize_nmme_dims(da: xr.DataArray, squeeze_init: bool = False) -> xr.DataArray:
+    """Normalize common NMME raw-file dimension names to init/ens/lead/lat/lon."""
+    rename_map = {}
+    if "S" in da.dims:
+        rename_map["S"] = "init"
+    if "M" in da.dims:
+        rename_map["M"] = "ens"
+    if "L" in da.dims:
+        rename_map["L"] = "lead"
+    if "Y" in da.dims:
+        rename_map["Y"] = "lat"
+    if "X" in da.dims:
+        rename_map["X"] = "lon"
+
+    da = da.rename(rename_map)
+
+    if squeeze_init and "init" in da.dims and da.sizes["init"] == 1:
+        da = da.squeeze("init")
+
+    return da
+
+
+def safe_contour_levels(da: xr.DataArray, n: int = 7) -> np.ndarray:
+    vmin = float(da.min(skipna=True))
+    vmax = float(da.max(skipna=True))
+
+    if np.isnan(vmin) or np.isnan(vmax):
+        return np.linspace(0.0, 1.0, n)
+
+    if np.isclose(vmin, vmax):
+        return np.linspace(vmin - 0.1, vmax + 0.1, n)
+
+    return np.linspace(vmin, vmax, n)
+
+
+def load_forecast(init_yyyymm: str, out_root: Path) -> Dict[str, xr.Dataset]:
+    """Load makefcsts-produced anomaly ensemble-mean forecast files for configured vars."""
+    def _load(var: str) -> xr.Dataset:
         fpath = (
             out_root
             / init_yyyymm
@@ -121,7 +233,30 @@ def load_forecast(init_yyyymm: str, out_root: Path) -> xr.Dataset:
         if not fpath.exists():
             raise FileNotFoundError(f"Forecast file not found: {fpath}")
         return xr.open_dataset(fpath)
+
     return {var: _load(var) for var in TERCILE_FORECAST_VARS}
+
+
+def load_realtime_hindcast_precip(model: str, init_month: int) -> xr.DataArray:
+    """
+    Load raw precipitation hindcast files used only for the precip-only
+    seasonal-total summary product.
+    """
+    files = sorted(
+        glob.glob(
+            f"/data/esplab/nmme-backup/{model}/hindcast/prec/"
+            f"prec_{model}_*_{init_month:02d}.nc"
+        )
+    )
+
+    if not files:
+        raise FileNotFoundError(
+            f"No precip hindcast files found for model={model}, init_month={init_month:02d}"
+        )
+
+    ds = xr.open_mfdataset(files, combine="by_coords", decode_times=False)
+    da = normalize_nmme_dims(ds["prec"])
+    return to_0360(da)
 
 
 def hindcast_thresholds_for_model(
@@ -133,11 +268,16 @@ def hindcast_thresholds_for_model(
     sfs_hind_root: Path,
     var: str = "prec_sfc",
 ) -> Tuple[xr.DataArray, xr.DataArray]:
+    """
+    Load precomputed hindcast tercile threshold files and return regional T33/T66 maps.
+
+    hind_root and sfs_hind_root are retained in the signature for compatibility
+    with the existing workflow even though this function uses precomputed tercile
+    files from tercile_dir.
+    """
     tercile_dir = Path("/data/esplab/shared/model/initialized/nmme/terciles/1991-2020/")
 
-    # Some models were precomputed with level-suffixed variable names
-    # (prec_sfc/tref_2m/sst_sfc), while others use legacy short names
-    # (prec/tref/sst or SST). Try all likely candidates in priority order.
+    # Some models use level-suffixed variable names; others use legacy short names.
     var_candidates = [var]
     legacy_map = {"prec_sfc": "prec", "tref_2m": "tref", "sst_sfc": "sst"}
     if var in legacy_map:
@@ -155,16 +295,15 @@ def hindcast_thresholds_for_model(
     if tercile_file is None:
         tried = [f"{model_name}.{v}.{season}.terciles.1991-2020.nc" for v in var_candidates]
         raise FileNotFoundError(
-            f"Tercile file not found for model={model_name}, season={season}, "
-            f"var={var}. Tried: {tried}"
+            f"Tercile file not found for model={model_name}, season={season}, var={var}. "
+            f"Tried: {tried}"
         )
 
     ds = xr.open_dataset(tercile_file)
     t33 = ds["t33"]
     t66 = ds["t66"]
 
-    # Some precomputed tercile files may carry stray non-spatial dims
-    # (e.g., M/member). Reduce those so thresholds are 2D lat/lon maps.
+    # Remove any stray non-spatial dims.
     for dim in list(t33.dims):
         if dim not in ("lat", "lon"):
             t33 = t33.mean(dim=dim, skipna=True)
@@ -172,15 +311,16 @@ def hindcast_thresholds_for_model(
         if dim not in ("lat", "lon"):
             t66 = t66.mean(dim=dim, skipna=True)
 
-    # Subset to region
     t33 = subset_region(t33, lat_bounds, lon_bounds)
     t66 = subset_region(t66, lat_bounds, lon_bounds)
     ds.close()
+
     return t33, t66
 
 
 def compute_region_probabilities(
     ds_fc: xr.Dataset,
+    init_yyyymm: str,
     forecast_var: str,
     season: str,
     lat_bounds: Tuple[float, float],
@@ -189,14 +329,18 @@ def compute_region_probabilities(
     sfs_hind_root: Path,
     model_names=None,
 ) -> Dict[str, xr.DataArray]:
-    l0, l1 = SEASON_LEADS[season]
+    """
+    Compute multimodel tercile probabilities from makefcsts-produced anomaly-mean
+    forecast fields and precomputed hindcast tercile thresholds.
+    """
+    l0, l1 = get_season_leads(init_yyyymm, season)
 
     bn_model = []
     nn_model = []
     an_model = []
 
     # Authoritative target grid for tercile probabilities: 1-degree regional grid.
-    # Per workflow requirement: only NOAA-SFS is remapped to this grid.
+    # Only NOAA-SFS is interpolated; others are reindexed exactly.
     lat0, lat1 = sorted([float(lat_bounds[0]), float(lat_bounds[1])])
     lon0 = (float(lon_bounds[0]) + 360.0) % 360.0
     lon1 = (float(lon_bounds[1]) + 360.0) % 360.0
@@ -205,7 +349,6 @@ def compute_region_probabilities(
     if lon0 <= lon1:
         target_lon_vals = np.arange(lon0, lon1 + 1e-6, 1.0)
     else:
-        # Dateline wrap case
         left = np.arange(lon0, 360.0, 1.0)
         right = np.arange(0.0, lon1 + 1e-6, 1.0)
         target_lon_vals = np.concatenate([left, right])
@@ -219,6 +362,7 @@ def compute_region_probabilities(
         if model_name not in ds_fc:
             print(f"[WARN] Forecast variable missing for {model_name}; skipping")
             continue
+
         try:
             t33, t66 = hindcast_thresholds_for_model(
                 model_name,
@@ -233,16 +377,14 @@ def compute_region_probabilities(
             print(f"[WARN] Skipping {model_name}: {e}")
             continue
 
-        # Only allow 'lead' dimension
         da = ds_fc[model_name]
-        if 'lead' in da.dims:
-            fc = to_0360(da.isel(lead=slice(l0, l1)).mean("lead"))
-        else:
+        if "lead" not in da.dims:
             raise ValueError(f"'lead' dimension not found in {model_name} data array (dims={da.dims})")
+
+        fc = to_0360(da.isel(lead=slice(l0, l1)).mean("lead"))
         fc = subset_region(fc, lat_bounds, lon_bounds)
 
-        # Forecast field can contain NaN padding from union-grid concat.
-        # Trim empty rows/cols before threshold interpolation/comparison.
+        # Trim NaN padding from union-grid concat before threshold comparison.
         fc = fc.dropna(dim="lat", how="all")
         fc = fc.dropna(dim="lon", how="all")
         if fc.sizes.get("lat", 0) == 0 or fc.sizes.get("lon", 0) == 0:
@@ -250,13 +392,10 @@ def compute_region_probabilities(
             continue
 
         if model_name == "NOAA-SFS":
-            # NOAA-SFS can be on a higher-resolution grid: interpolate to 1-degree.
             fc_t = fc.interp(lat=target_lat, lon=target_lon, method="linear")
             t33_t = t33.interp(lat=target_lat, lon=target_lon, method="linear")
             t66_t = t66.interp(lat=target_lat, lon=target_lon, method="linear")
         else:
-            # Other models are expected on the 1-degree target grid already.
-            # Use exact reindexing (no interpolation) to preserve values.
             fc_t = fc.reindex(lat=target_lat.values, lon=target_lon.values)
             t33_t = t33.reindex(lat=target_lat.values, lon=target_lon.values)
             t66_t = t66.reindex(lat=target_lat.values, lon=target_lon.values)
@@ -278,9 +417,7 @@ def compute_region_probabilities(
         "AN": xr.concat(an_model, dim="model", coords="minimal", compat="override").mean("model"),
     }
 
-    # PREC is noisier and can show artificial banding after categorical
-    # aggregation. Apply a light 3x3 neighborhood smoothing to improve
-    # spatial coherence while preserving probability mass.
+    # Light smoothing for precip only.
     if forecast_var == "prec":
         prob = {
             k: v.rolling(lat=3, lon=3, center=True, min_periods=1).mean()
@@ -293,6 +430,103 @@ def compute_region_probabilities(
     return prob
 
 
+def compute_multimodel_threshold_maps(
+    forecast_var: str,
+    season: str,
+    lat_bounds: Tuple[float, float],
+    lon_bounds: Tuple[float, float],
+    hind_root: Path,
+    sfs_hind_root: Path,
+    model_names: Iterable[str],
+) -> Tuple[xr.DataArray, xr.DataArray]:
+    """
+    Compute multimodel-mean T33/T66 threshold maps from precomputed hindcast terciles.
+    Works for both prec and tref.
+    """
+    tercile_var = FORECAST_VAR_TO_TERCILE_VAR[forecast_var]
+
+    t33_all = []
+    t66_all = []
+
+    for model_name in model_names:
+        try:
+            t33, t66 = hindcast_thresholds_for_model(
+                model_name,
+                season,
+                lat_bounds,
+                lon_bounds,
+                hind_root,
+                sfs_hind_root,
+                var=tercile_var,
+            )
+            t33_all.append(t33)
+            t66_all.append(t66)
+        except (FileNotFoundError, RuntimeError) as e:
+            print(f"[WARN] Threshold map skipping {model_name}: {e}")
+
+    if not t33_all:
+        raise RuntimeError(
+            f"No threshold maps available for var={forecast_var}, season={season}"
+        )
+
+    t33_mean = xr.concat(t33_all, dim="model", coords="minimal", compat="override").mean("model")
+    t66_mean = xr.concat(t66_all, dim="model", coords="minimal", compat="override").mean("model")
+
+    return t33_mean, t66_mean
+
+
+def compute_multimodel_precip_seasonal_total_stats(
+    init_yyyymm: str,
+    season: str,
+    lat_bounds: Tuple[float, float],
+    lon_bounds: Tuple[float, float],
+    model_names: Iterable[str],
+    days_per_lead: int = 30,
+) -> Tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    """
+    Compute precip-only seasonal total summary from raw hindcasts:
+      - mean seasonal total
+      - lower tercile of seasonal total
+      - upper tercile of seasonal total
+    """
+    init_month = int(init_yyyymm[4:])
+    l0, l1 = get_season_leads(init_yyyymm, season)
+
+    mean_all = []
+    t33_all = []
+    t66_all = []
+
+    for model_name in model_names:
+        try:
+            hc = load_realtime_hindcast_precip(model_name, init_month)
+
+            hc_subset = hc.isel(lead=slice(l0, l1))
+            hc_total = (hc_subset * days_per_lead).sum("lead")
+
+            sample = hc_total.stack(sample=("init", "ens"))
+            t33 = sample.quantile(0.33, "sample").squeeze(drop=True).reset_coords(drop=True)
+            t66 = sample.quantile(0.66, "sample").squeeze(drop=True).reset_coords(drop=True)
+            mean_field = hc_total.mean(dim=("init", "ens"), skipna=True)
+
+            mean_all.append(subset_region(mean_field, lat_bounds, lon_bounds))
+            t33_all.append(subset_region(t33, lat_bounds, lon_bounds))
+            t66_all.append(subset_region(t66, lat_bounds, lon_bounds))
+
+        except FileNotFoundError as e:
+            print(f"[WARN] Seasonal-total precip skipping {model_name}: {e}")
+
+    if not mean_all:
+        raise RuntimeError(
+            f"No precip hindcasts available for seasonal-total stats: season={season}"
+        )
+
+    mean_field = xr.concat(mean_all, dim="model", coords="minimal", compat="override").mean("model")
+    t33_mean = xr.concat(t33_all, dim="model", coords="minimal", compat="override").mean("model")
+    t66_mean = xr.concat(t66_all, dim="model", coords="minimal", compat="override").mean("model")
+
+    return mean_field, t33_mean, t66_mean
+
+
 def plot_probabilities(
     prob: Dict[str, xr.DataArray],
     region: str,
@@ -301,7 +535,11 @@ def plot_probabilities(
     lead_label: str,
     out_png: Path,
 ) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+    """Original 3-panel BN/NN/AN tercile probability plot."""
+    fig, axes = plt.subplots(
+        1, 3, figsize=(18, 6),
+        subplot_kw={"projection": ccrs.PlateCarree()}
+    )
     # Finer bins reduce the chance of maps appearing uniformly colored when
     # probabilities occupy a narrow but valid range.
     levels = np.arange(0, 105, 5)
@@ -314,7 +552,15 @@ def plot_probabilities(
 
     for ax, (key, title, cmap) in zip(axes, panels):
         da = _to_percent_if_fraction(prob[key], f"plot/{region}/{season}/{key}")
-        ax.set_extent([float(da.lon.min()), float(da.lon.max()), float(da.lat.min()), float(da.lat.max())])
+        ax.set_extent(
+            [
+                float(da.lon.min()),
+                float(da.lon.max()),
+                float(da.lat.min()),
+                float(da.lat.max()),
+            ],
+            crs=ccrs.PlateCarree(),
+        )
         m = ax.contourf(
             da["lon"],
             da["lat"],
@@ -338,18 +584,332 @@ def plot_probabilities(
     )
     fig.tight_layout()
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=120)
+    fig.savefig(out_png, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_threshold_maps(
+    t33: xr.DataArray,
+    t66: xr.DataArray,
+    region: str,
+    season: str,
+    init_yyyymm: str,
+    forecast_var: str,
+    out_png: Path,
+) -> None:
+    """2-panel hindcast threshold map (T33/T66), for both prec and tref."""
+    fig, axes = plt.subplots(
+        1, 2, figsize=(14, 6),
+        subplot_kw={"projection": ccrs.PlateCarree()}
+    )
+
+    meta = VAR_META[forecast_var]
+    cmap_lo, cmap_hi = meta["threshold_cmaps"]
+
+    fields = [
+        (t33, "Lower Tercile Threshold (T33)", cmap_lo),
+        (t66, "Upper Tercile Threshold (T66)", cmap_hi),
+    ]
+
+    for ax, (da, title, cmap) in zip(axes, fields):
+        da.plot(
+            ax=ax,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap,
+            cbar_kwargs=dict(label=f"{meta['label']} ({meta['unit']})"),
+        )
+
+        levels = safe_contour_levels(da, n=7)
+        cs = ax.contour(
+            da.lon,
+            da.lat,
+            da,
+            levels=levels,
+            colors="black",
+            linewidths=0.8,
+            transform=ccrs.PlateCarree(),
+        )
+        ax.clabel(cs, inline=True, fontsize=8, fmt="%.2f")
+
+        ax.set_extent(
+            [
+                float(da.lon.min()),
+                float(da.lon.max()),
+                float(da.lat.min()),
+                float(da.lat.max()),
+            ],
+            crs=ccrs.PlateCarree(),
+        )
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+        ax.add_feature(cfeature.STATES, linewidth=0.4)
+        ax.set_title(title)
+
+    plt.suptitle(
+        f"NMME {init_yyyymm} {season} Hindcast Tercile Thresholds - {region} ({forecast_var})",
+        fontsize=14,
+    )
+    plt.tight_layout()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_most_likely_from_prob(
+    prob: Dict[str, xr.DataArray],
+    region: str,
+    season: str,
+    init_yyyymm: str,
+    forecast_var: str,
+    out_png: Path,
+    mask_threshold: float = 40.0,
+) -> None:
+    """Plot the most-likely tercile using existing BN/NN/AN probabilities."""
+    stacked = xr.concat(
+        [
+            prob["BN"].reset_coords(drop=True),
+            prob["NN"].reset_coords(drop=True),
+            prob["AN"].reset_coords(drop=True),
+        ],
+        dim="tercile",
+        coords="minimal",
+    )
+
+    most_likely = stacked.argmax(dim="tercile")
+    prob_of_choice = stacked.max(dim="tercile")
+    most_likely = most_likely.where(prob_of_choice > mask_threshold)
+
+    fig = plt.figure(figsize=(8, 6))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+
+    cmap = ListedColormap([
+        "#2166ac",  # Below Normal
+        "#bdbdbd",  # Near Normal
+        "#b2182b",  # Above Normal
+    ])
+    cmap.set_bad("white")
+
+    im = most_likely.plot(
+        ax=ax,
+        transform=ccrs.PlateCarree(),
+        cmap=cmap,
+        vmin=0,
+        vmax=2,
+        add_colorbar=True,
+        cbar_kwargs=dict(
+            ticks=[0, 1, 2],
+            shrink=0.85,
+            pad=0.03,
+        ),
+    )
+
+    cbar = im.colorbar
+    cbar.ax.set_yticklabels(["Below", "Near", "Above"])
+
+    ref = prob["BN"]
+    ax.set_extent(
+        [
+            float(ref.lon.min()),
+            float(ref.lon.max()),
+            float(ref.lat.min()),
+            float(ref.lat.max()),
+        ],
+        crs=ccrs.PlateCarree(),
+    )
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.9)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.7)
+    ax.add_feature(cfeature.STATES, linewidth=0.4)
+
+    ax.set_title(
+        f"NMME {init_yyyymm} {season} Most-Likely Tercile - {region} ({forecast_var})\n"
+        f"Shown where probability > {mask_threshold:.0f}%",
+        fontsize=13,
+        weight="bold",
+    )
+
+    plt.tight_layout()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _add_cpt_colorbars(fig, ax):
+    """Add three CPT-style mini colorbars below the axis."""
+    bbox = ax.get_position()
+    y = bbox.y0 - 0.10
+    h = 0.03
+    gap = 0.02
+    w = (bbox.width - 2 * gap) / 3
+
+    bars = [
+        ("BN (%)", plt.cm.Blues),
+        ("NN (%)", plt.cm.Greens),
+        ("AN (%)", plt.cm.YlOrRd),
+    ]
+
+    for i, (label, cmap) in enumerate(bars):
+        cax = fig.add_axes([bbox.x0 + i * (w + gap), y, w, h])
+        sm = mpl.cm.ScalarMappable(
+            norm=mpl.colors.Normalize(vmin=40, vmax=100),
+            cmap=cmap,
+        )
+        cb = fig.colorbar(sm, cax=cax, orientation="horizontal")
+        cb.set_label(label, fontsize=9)
+        cb.set_ticks([40, 50, 60, 70, 80, 90, 100])
+        cb.ax.tick_params(labelsize=8)
+
+
+def plot_cpt_dominant_from_prob(
+    prob: Dict[str, xr.DataArray],
+    region: str,
+    season: str,
+    init_yyyymm: str,
+    forecast_var: str,
+    out_png: Path,
+    mask_threshold: float = 40.0,
+) -> None:
+    """Plot a CPT-style dominant-category tercile map from existing BN/NN/AN probabilities."""
+    prob_stack = xr.concat(
+        [
+            prob["BN"].reset_coords(drop=True),
+            prob["NN"].reset_coords(drop=True),
+            prob["AN"].reset_coords(drop=True),
+        ],
+        dim="category",
+        coords="minimal",
+    ) / 100.0
+
+    prob_stack = prob_stack.assign_coords(category=["BN", "NN", "AN"])
+    dominant_cat = prob_stack.argmax("category")
+    dominant_val = prob_stack.max("category")
+    mask = dominant_val >= (mask_threshold / 100.0)
+
+    fig, ax = plt.subplots(
+        figsize=(9, 5),
+        subplot_kw=dict(projection=ccrs.PlateCarree()),
+    )
+
+    cmaps = {
+        0: plt.cm.Blues,
+        1: plt.cm.Greens,
+        2: plt.cm.YlOrRd,
+    }
+
+    for idx, cmap in cmaps.items():
+        field = prob_stack.isel(category=idx).where(mask & (dominant_cat == idx))
+        field.plot(
+            ax=ax,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap,
+            vmin=mask_threshold / 100.0,
+            vmax=1.0,
+            add_colorbar=False,
+        )
+
+    ref = prob["BN"]
+    ax.set_extent(
+        [
+            float(ref.lon.min()),
+            float(ref.lon.max()),
+            float(ref.lat.min()),
+            float(ref.lat.max()),
+        ],
+        crs=ccrs.PlateCarree(),
+    )
+
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.9)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.7)
+    ax.add_feature(cfeature.STATES, linewidth=0.4)
+
+    ax.set_title(
+        f"NMME {init_yyyymm} {season} Dominant Tercile Probability - {region} ({forecast_var})",
+        fontsize=13,
+        weight="bold",
+    )
+
+    _add_cpt_colorbars(fig, ax)
+    plt.subplots_adjust(bottom=0.25)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_precip_seasonal_total_summary(
+    mean_field: xr.DataArray,
+    t33: xr.DataArray,
+    t66: xr.DataArray,
+    region: str,
+    season: str,
+    init_yyyymm: str,
+    out_png: Path,
+) -> None:
+    """Precip-only 3-panel seasonal-total summary (mean, T33, T66)."""
+    fig, axes = plt.subplots(
+        1, 3, figsize=(20, 6),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
+
+    fields = [
+        (mean_field, "Mean Seasonal Total Precipitation", "Greens"),
+        (t33, "Lower Tercile (Dry Season Total)", "Blues"),
+        (t66, "Upper Tercile (Wet Season Total)", "Reds"),
+    ]
+
+    for ax, (da, title, cmap) in zip(axes, fields):
+        da.plot(
+            ax=ax,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap,
+            cbar_kwargs=dict(label="Seasonal Total Precipitation (mm/season)"),
+        )
+
+        levels = safe_contour_levels(da, n=7)
+        cs = ax.contour(
+            da.lon,
+            da.lat,
+            da,
+            levels=levels,
+            colors="black",
+            linewidths=0.8,
+            transform=ccrs.PlateCarree(),
+        )
+        ax.clabel(cs, fontsize=8, fmt="%.1f")
+
+        ax.set_extent(
+            [
+                float(da.lon.min()),
+                float(da.lon.max()),
+                float(da.lat.min()),
+                float(da.lat.max()),
+            ],
+            crs=ccrs.PlateCarree(),
+        )
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+        ax.add_feature(cfeature.STATES, linewidth=0.4)
+        ax.set_title(title)
+
+    plt.suptitle(
+        f"NMME {init_yyyymm} {season} Seasonal Total Precipitation - {region}",
+        fontsize=14,
+    )
+    plt.tight_layout()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
 def build_target_label(init_yyyymm: str, season: str) -> str:
+    """Build human-readable lead label from init month and dynamic lead window."""
     init_dt = datetime.strptime(init_yyyymm, "%Y%m")
-    l0, l1 = SEASON_LEADS[season]
+    l0, l1 = get_season_leads(init_yyyymm, season)
+
     month_labels = []
     for lead in range(l0, l1):
         year = init_dt.year + ((init_dt.month - 1 + lead) // 12)
         month = ((init_dt.month - 1 + lead) % 12) + 1
         month_labels.append(datetime(year, month, 1).strftime("%b %Y"))
+
     return f"Lead L{l0}-L{l1 - 1}; Target: {' - '.join(month_labels)}"
 
 
@@ -360,30 +920,30 @@ def main() -> int:
     monthly_root = Path(cfg["data"]["output"]["nmme_monthly"])
     seasonal_root = Path(cfg["data"]["output"]["nmme_seasonal"])
     hind_root = Path("/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full")
-    sfs_hind_root = Path(
-        cfg.get("pipeline", {})
-        .get("sfs", {})
-        .get("climo_input_dir", "/data/esplab/nmme-backup/NOAA-SFS/reforecast")
-    ) / "prec"
+    sfs_hind_root = (
+        Path(
+            cfg.get("pipeline", {})
+            .get("sfs", {})
+            .get("climo_input_dir", "/data/esplab/nmme-backup/NOAA-SFS/reforecast")
+        )
+        / "prec"
+    )
 
     if args.seasons.upper() == "ALL":
-        seasons = list(SEASON_LEADS.keys())
+        seasons = list(SEASON_MONTHS.keys())
     else:
-        seasons = [s.strip().upper() for s in args.seasons.split(",") if s.strip()]
-        bad = [s for s in seasons if s not in SEASON_LEADS]
+        seasons = [s.strip() for s in args.seasons.split(",") if s.strip()]
+        bad = [s for s in seasons if s not in SEASON_MONTHS]
         if bad:
-            raise ValueError(f"Unsupported seasons: {bad}. Allowed: {list(SEASON_LEADS)}")
-
-    if args.outdir:
-        outdir = Path(args.outdir)
-    else:
-        outdir = seasonal_root / args.init / "images" / "terciles"
+            raise ValueError(f"Unsupported seasons: {bad}. Allowed: {list(SEASON_MONTHS)}")
 
     ds_fc_dict = load_forecast(args.init, monthly_root)
     regions = cfg.get("pycpt_regions", [])
     configured_models = cfg.get("models", [])
     if not regions:
         raise ValueError("No pycpt_regions in config")
+    if not configured_models:
+        raise ValueError("No models listed in config")
 
     if args.regions.upper() != "ALL":
         wanted = {r.strip() for r in args.regions.split(",") if r.strip()}
@@ -391,9 +951,13 @@ def main() -> int:
         if not regions:
             raise ValueError(f"No matching regions for --regions={args.regions}")
 
-    # Write outputs to the seasonal directory instead of monthly
+    # NetCDF outputs go to the seasonal data directory.
     tercile_outdir = seasonal_root / args.init / "data" / "terciles"
     tercile_outdir.mkdir(parents=True, exist_ok=True)
+
+    # Image outputs can be redirected with --outdir.
+    image_root = Path(args.outdir) if args.outdir else (seasonal_root / args.init / "images")
+    image_root.mkdir(parents=True, exist_ok=True)
 
     for var, ds_fc in ds_fc_dict.items():
         for reg in regions:
@@ -404,8 +968,13 @@ def main() -> int:
             for season in seasons:
                 print(f"[INFO] Computing {rname} {season} {var}")
                 lead_label = build_target_label(args.init, season)
+
+                # -------------------------------------------------------------
+                # Core tercile probabilities (existing workflow)
+                # -------------------------------------------------------------
                 prob = compute_region_probabilities(
                     ds_fc,
+                    args.init,
                     var,
                     season,
                     lat_bounds,
@@ -414,16 +983,131 @@ def main() -> int:
                     sfs_hind_root,
                     model_names=configured_models,
                 )
-                # Write tercile probabilities to NetCDF
-                out_nc = tercile_outdir / rname / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"
-                out_nc.parent.mkdir(parents=True, exist_ok=True)
+
+                out_nc = tercile_outdir / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"
                 xr.Dataset(prob).to_netcdf(out_nc)
                 print(f"[INFO] Wrote {out_nc}")
-                # Optionally, plot for each variable as before
-                out_png = outdir / rname / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.png"
-                out_png.parent.mkdir(parents=True, exist_ok=True)
+
+                # -------------------------------------------------------------
+                # Existing 3-panel BN/NN/AN map
+                # -------------------------------------------------------------
+                out_png = (
+                    image_root
+                    / "tercile_probs"
+                    / rname
+                    / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.png"
+                )
                 plot_probabilities(prob, rname, season, args.init, lead_label, out_png)
                 print(f"[INFO] Wrote {out_png}")
+
+                # -------------------------------------------------------------
+                # New 2-panel threshold maps (prec + tref)
+                # -------------------------------------------------------------
+                try:
+                    t33_map, t66_map = compute_multimodel_threshold_maps(
+                        var,
+                        season,
+                        lat_bounds,
+                        lon_bounds,
+                        hind_root,
+                        sfs_hind_root,
+                        model_names=configured_models,
+                    )
+
+                    out_png = (
+                        image_root
+                        / "threshold_maps"
+                        / rname
+                        / f"NMME_{args.init}_{rname}_{season}_{var}_thresholds.png"
+                    )
+                    plot_threshold_maps(
+                        t33_map,
+                        t66_map,
+                        rname,
+                        season,
+                        args.init,
+                        var,
+                        out_png,
+                    )
+                    print(f"[INFO] Wrote {out_png}")
+                except Exception as e:
+                    print(f"[WARN] Failed threshold maps for {rname} {season} {var}: {e}")
+
+                # -------------------------------------------------------------
+                # New most-likely tercile map (prec + tref)
+                # -------------------------------------------------------------
+                try:
+                    out_png = (
+                        image_root
+                        / "most_likely"
+                        / rname
+                        / f"NMME_{args.init}_{rname}_{season}_{var}_most_likely.png"
+                    )
+                    plot_most_likely_from_prob(
+                        prob,
+                        rname,
+                        season,
+                        args.init,
+                        var,
+                        out_png,
+                    )
+                    print(f"[INFO] Wrote {out_png}")
+                except Exception as e:
+                    print(f"[WARN] Failed most-likely plot for {rname} {season} {var}: {e}")
+
+                # -------------------------------------------------------------
+                # New CPT-style dominant-category map (prec + tref)
+                # -------------------------------------------------------------
+                try:
+                    out_png = (
+                        image_root
+                        / "cpt_dominant"
+                        / rname
+                        / f"NMME_{args.init}_{rname}_{season}_{var}_cpt_dominant.png"
+                    )
+                    plot_cpt_dominant_from_prob(
+                        prob,
+                        rname,
+                        season,
+                        args.init,
+                        var,
+                        out_png,
+                    )
+                    print(f"[INFO] Wrote {out_png}")
+                except Exception as e:
+                    print(f"[WARN] Failed CPT dominant plot for {rname} {season} {var}: {e}")
+
+                # -------------------------------------------------------------
+                # New precip-only seasonal total summary
+                # -------------------------------------------------------------
+                if var == "prec":
+                    try:
+                        mean_field, t33_total, t66_total = compute_multimodel_precip_seasonal_total_stats(
+                            args.init,
+                            season,
+                            lat_bounds,
+                            lon_bounds,
+                            model_names=configured_models,
+                        )
+
+                        out_png = (
+                            image_root
+                            / "seasonal_total_summary"
+                            / rname
+                            / f"NMME_{args.init}_{rname}_{season}_{var}_seasonal_total_summary.png"
+                        )
+                        plot_precip_seasonal_total_summary(
+                            mean_field,
+                            t33_total,
+                            t66_total,
+                            rname,
+                            season,
+                            args.init,
+                            out_png,
+                        )
+                        print(f"[INFO] Wrote {out_png}")
+                    except Exception as e:
+                        print(f"[WARN] Failed seasonal-total precip summary for {rname} {season}: {e}")
 
     return 0
 
