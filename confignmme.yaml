@@ -128,14 +128,14 @@ pipeline:
     copy_seasonal: true
     copy_latest: true
     update_html: true
-    dest_host: somclass23.som.nor.ou.edu
-    dest_dir: /home/kpegion/http/nmme/forecasts
+    dest_host: somclass23
+    dest_dir: /data/web/kpegion/http/nmme/forecasts
     ssh_key: ~/.ssh/id_ed25519
     copy_static_once: true
     copy_static_force: false
     static_climatology_source: /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020
     static_terciles_source: /data/esplab/shared/model/initialized/nmme/terciles/1991-2020
-    hindcasts_dest_dir: /home/kpegion/http/nmme/hindcasts
+    hindcasts_dest_dir: /data/web/kpegion/http/nmme/hindcasts
 
 
 # ------------------------------------------------------------

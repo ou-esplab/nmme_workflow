@@ -79,8 +79,8 @@ PUBLISH_COPY_MONTHLY="${PUBLISH_COPY_MONTHLY:-$(cfg_get 'pipeline.publish.copy_m
 PUBLISH_COPY_SEASONAL="${PUBLISH_COPY_SEASONAL:-$(cfg_get 'pipeline.publish.copy_seasonal' '1')}"
 PUBLISH_COPY_LATEST="${PUBLISH_COPY_LATEST:-$(cfg_get 'pipeline.publish.copy_latest' '1')}"
 PUBLISH_UPDATE_HTML="${PUBLISH_UPDATE_HTML:-$(cfg_get 'pipeline.publish.update_html' '1')}"
-PUBLISH_DEST_HOST="${PUBLISH_DEST_HOST:-$(cfg_get 'pipeline.publish.dest_host' 'somclass23.som.nor.ou.edu')}"
-PUBLISH_DEST_DIR="${PUBLISH_DEST_DIR:-$(cfg_get 'pipeline.publish.dest_dir' '/home/kpegion/http/nmme/forecasts')}"
+PUBLISH_DEST_HOST="${PUBLISH_DEST_HOST:-$(cfg_get 'pipeline.publish.dest_host' 'somclass23')}"
+PUBLISH_DEST_DIR="${PUBLISH_DEST_DIR:-$(cfg_get 'pipeline.publish.dest_dir' '/data/web/kpegion/http/nmme/forecasts')}"
 PUBLISH_SSH_KEY="${PUBLISH_SSH_KEY:-$(cfg_get 'pipeline.publish.ssh_key' '~/.ssh/id_ed25519')}"
 PUBLISH_COPY_STATIC_ONCE="${PUBLISH_COPY_STATIC_ONCE:-$(cfg_get 'pipeline.publish.copy_static_once' '1')}"
 PUBLISH_COPY_STATIC_FORCE="${PUBLISH_COPY_STATIC_FORCE:-$(cfg_get 'pipeline.publish.copy_static_force' '0')}"
@@ -142,34 +142,39 @@ fi
 
 run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
   "mkdir -p \
-    ${PUBLISH_DEST_DIR}/monthly/${fcstdate}/images \
-    ${PUBLISH_DEST_DIR}/monthly/${fcstdate}/data \
-    ${PUBLISH_DEST_DIR}/monthly/images/Latest \
-    ${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/images \
-    ${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/data \
-    ${PUBLISH_DEST_DIR}/seasonal/images/Latest"
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Mexico \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Venezuela \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Iran \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Mexico"
 
 if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
-  if [[ -d "${sourceDirMon}/images" ]]; then
-    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirMon}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/monthly/${fcstdate}/images/"
-    if [[ "$PUBLISH_COPY_LATEST" == "1" ]]; then
-      run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirMon}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/monthly/images/Latest/"
-    fi
-  fi
-  if [[ -d "${sourceDirMon}/data" ]]; then
-    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirMon}/data/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/monthly/${fcstdate}/data/"
+  if [[ -d "${sourceDirMon}/images/anomalies" ]]; then
+      # Copy monthly forecast images organized by region
+      # Global images
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Global/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global/" 2>/dev/null || true
+      # North America images
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/NorthAmerica/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America/" 2>/dev/null || true
+      # Venezuela images
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Venezuela/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela/" 2>/dev/null || true
+      # Iran images
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Iran/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran/" 2>/dev/null || true
+      # Mexico images
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Mexico/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Mexico/" 2>/dev/null || true
   fi
 fi
 
 if [[ "$PUBLISH_COPY_SEASONAL" == "1" ]]; then
-  if [[ -d "${sourceDirSeas}/images" ]]; then
-    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/images/"
-    if [[ "$PUBLISH_COPY_LATEST" == "1" ]]; then
-      run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/images/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/seasonal/images/Latest/"
-    fi
-  fi
-  if [[ -d "${sourceDirSeas}/data" ]]; then
-    run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/data/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/seasonal/${fcstdate}/data/"
+  if [[ -d "${sourceDirSeas}/images/terciles" ]]; then
+      # Copy seasonal tercile maps organized by region
+      for region in Venezuela Iran Mexico; do
+        if [[ -d "${sourceDirSeas}/images/terciles/${region}" ]]; then
+          run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/images/terciles/${region}/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${region}/"
+        fi
+      done
   fi
 fi
 

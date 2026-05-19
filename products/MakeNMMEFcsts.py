@@ -83,7 +83,7 @@ def main() -> int:
 
     out_root = Path(cfg["data"]["output"]["nmme_monthly"])
     fcst_yyyymm = fcstdate.strftime("%Y%m")
-    figpath = out_root / fcst_yyyymm / "images"
+    figpath = out_root / fcst_yyyymm / "images" / "anomalies"
 
     print(f"[INFO] Forecast init: {fcstdate:%Y-%m}")
     print(f"[INFO] Data root: {data_root}")

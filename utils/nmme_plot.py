@@ -246,7 +246,9 @@ def nmme_plot(ds, path, land_mask_path=None):
 
         for reg_name in var_params["regions"]:
             reg = next(r for r in reg_params_dict if r["name"] == reg_name)
-            figname = path / f"{var_params['outname']}{reg['name']}"
+            reg_dir = path / reg["name"]
+            os.makedirs(reg_dir, exist_ok=True)
+            figname = reg_dir / f"{var_params['outname']}{reg['name']}"
 
             _plot_variable_for_region(
                 ds, v, var_params, reg, figname, model_plot_locs, fcstdate, land_mask

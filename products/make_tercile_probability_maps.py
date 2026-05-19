@@ -6,8 +6,6 @@ computes model-agreement tercile probabilities (BN/NN/AN) against hindcast
 thresholds. It then writes one 3-panel map per region-season.
 """
 
-from __future__ import annotations
-
 import argparse
 import glob
 from pathlib import Path
@@ -55,6 +53,21 @@ SEASON_LEADS: Dict[str, Tuple[int, int]] = {
     "ASO": (7, 10),
     "NDJ": (8, 11),
 }
+
+
+def _to_percent_if_fraction(da: xr.DataArray, label: str) -> xr.DataArray:
+    """Normalize probability units to percent if values are in 0..1 fraction space."""
+    finite = da.where(np.isfinite(da), drop=True)
+    if finite.size == 0:
+        return da
+
+    vmin = float(finite.min())
+    vmax = float(finite.max())
+    if -1e-6 <= vmin and vmax <= 1.000001:
+        print(f"[INFO] {label}: detected fractional probabilities (0..1); converting to percent")
+        return da * 100.0
+
+    return da
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,7 +187,7 @@ def compute_region_probabilities(
     lon_bounds: Tuple[float, float],
     hind_root: Path,
     sfs_hind_root: Path,
-    model_names: Iterable[str] | None = None,
+    model_names=None,
 ) -> Dict[str, xr.DataArray]:
     l0, l1 = SEASON_LEADS[season]
 
@@ -274,6 +287,9 @@ def compute_region_probabilities(
             for k, v in prob.items()
         }
 
+    # Guard against regressions where probabilities are left in 0..1 space.
+    prob = {k: _to_percent_if_fraction(v, f"{k}/{forecast_var}/{season}") for k, v in prob.items()}
+
     return prob
 
 
@@ -286,7 +302,9 @@ def plot_probabilities(
     out_png: Path,
 ) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(18, 6), subplot_kw={"projection": ccrs.PlateCarree()})
-    levels = np.arange(0, 110, 10)
+    # Finer bins reduce the chance of maps appearing uniformly colored when
+    # probabilities occupy a narrow but valid range.
+    levels = np.arange(0, 105, 5)
 
     panels = [
         ("BN", "Below Normal", "Blues"),
@@ -295,7 +313,7 @@ def plot_probabilities(
     ]
 
     for ax, (key, title, cmap) in zip(axes, panels):
-        da = prob[key]
+        da = _to_percent_if_fraction(prob[key], f"plot/{region}/{season}/{key}")
         ax.set_extent([float(da.lon.min()), float(da.lon.max()), float(da.lat.min()), float(da.lat.max())])
         m = ax.contourf(
             da["lon"],
@@ -339,7 +357,8 @@ def main() -> int:
     args = parse_args()
 
     cfg = load_config(args.config)
-    out_root = Path(cfg["data"]["output"]["nmme_monthly"])
+    monthly_root = Path(cfg["data"]["output"]["nmme_monthly"])
+    seasonal_root = Path(cfg["data"]["output"]["nmme_seasonal"])
     hind_root = Path("/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full")
     sfs_hind_root = Path(
         cfg.get("pipeline", {})
@@ -358,9 +377,9 @@ def main() -> int:
     if args.outdir:
         outdir = Path(args.outdir)
     else:
-        outdir = out_root / args.init / "images" / "tercile_probs"
+        outdir = seasonal_root / args.init / "images" / "terciles"
 
-    ds_fc_dict = load_forecast(args.init, out_root)
+    ds_fc_dict = load_forecast(args.init, monthly_root)
     regions = cfg.get("pycpt_regions", [])
     configured_models = cfg.get("models", [])
     if not regions:
@@ -373,7 +392,6 @@ def main() -> int:
             raise ValueError(f"No matching regions for --regions={args.regions}")
 
     # Write outputs to the seasonal directory instead of monthly
-    seasonal_root = Path("/data/esplab/shared/model/initialized/nmme/forecast/seasonal")
     tercile_outdir = seasonal_root / args.init / "data" / "terciles"
     tercile_outdir.mkdir(parents=True, exist_ok=True)
 
@@ -397,11 +415,12 @@ def main() -> int:
                     model_names=configured_models,
                 )
                 # Write tercile probabilities to NetCDF
-                out_nc = tercile_outdir / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"
+                out_nc = tercile_outdir / rname / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"
+                out_nc.parent.mkdir(parents=True, exist_ok=True)
                 xr.Dataset(prob).to_netcdf(out_nc)
                 print(f"[INFO] Wrote {out_nc}")
                 # Optionally, plot for each variable as before
-                out_png = seasonal_root / args.init / "images" / "tercile_probs" / rname / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.png"
+                out_png = outdir / rname / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.png"
                 out_png.parent.mkdir(parents=True, exist_ok=True)
                 plot_probabilities(prob, rname, season, args.init, lead_label, out_png)
                 print(f"[INFO] Wrote {out_png}")

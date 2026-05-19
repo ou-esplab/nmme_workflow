@@ -1,3 +1,5 @@
+import os
+
 import pandas as pd
 import xarray as xr
 from utils.nmme_metadata import init_models
@@ -141,6 +143,7 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
             f"{fcstdate}/data/"
             f"NMME_fcst_{fcstdate}.anom.monthly.{v}.emean.nc"
         )
+        os.makedirs(os.path.dirname(ofname_mon), exist_ok=True)
         ds_models.to_netcdf(ofname_mon)
 
         # ---------------------------
@@ -158,6 +161,7 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
             f"{fcstdate}/data/"
             f"NMME_fcst_{fcstdate}.anom.seas.{v}.emean.nc"
         )
+        os.makedirs(os.path.dirname(ofname_seas), exist_ok=True)
         ds_seas.to_netcdf(ofname_seas)
 
         print(f"[nmme_write] wrote {v}")
