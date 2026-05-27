@@ -152,15 +152,61 @@ def main() -> int:
                             print(f"[SKIP] Tercile file exists and is valid: {tercile_path}")
 
     # ---------- Climatology (optional static stage) ----------
+    # Runs make_sfs_climo_from_reforecast.py for every model/variable that
+    # does not yet have a climo file.  Model variable lists and level suffixes
+    # mirror run_all_climos.sh.  Models with limited hindcast periods (e.g.,
+    # COLA-RSMAS-CESM1 hindcast ends 2010) get an appropriate --end-year.
     if "climatology" in args.stages and args.system == "nmme":
-        stage_cmds["climatology"] = [
-            "python",
-            "static/make_sfs_climo_from_reforecast.py",
-            "--model", "NOAA-SFS",
-            "--local-var", "prec",
-            "--output-file", 
-            f"{args.climatology_root}/NOAA-SFS.prec_sfc.clim.1991-2020.nc",
-        ]
+        import yaml as _yaml
+
+        with open(args.config) as _f:
+            _cfg = _yaml.safe_load(_f)
+
+        _model_vars = {
+            "NASA-GEOSS2S":    {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
+            "CanESM5":         {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
+            "GEM5.2-NEMO":     {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
+            "NCEP-CFSv2":      {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
+            "NCAR-CESM1":      {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
+            "COLA-RSMAS-CCSM4":{"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
+            "COLA-RSMAS-CESM1":{"vars": ["prec","tref","sst","h200"],        "end_year": 2010},
+            "NOAA-SFS":        {"vars": ["prec","tref","sst"],               "end_year": 2020},
+        }
+        _lev = {"prec":"sfc","tref":"2m","sst":"sfc","h200":"200","h500":"500"}
+
+        _climo_cmds = []
+        for _model in _cfg.get("models", []):
+            _spec = _model_vars.get(_model)
+            if _spec is None:
+                print(f"[WARN] No climo spec for model {_model}; skipping climatology")
+                continue
+            _hind_root = (
+                f"/data/esplab/nmme-backup/{_model}/reforecast"
+                if _model == "NOAA-SFS"
+                else f"/data/esplab/nmme-backup/{_model}/hindcast"
+            )
+            for _var in _spec["vars"]:
+                _out = (
+                    f"{args.climatology_root}/"
+                    f"{_model}.{_var}_{_lev[_var]}.clim.1991-2020.nc"
+                )
+                if Path(_out).exists():
+                    print(f"[SKIP] Climo file already exists: {_out}")
+                    continue
+                _climo_cmds.append([
+                    "python", "static/make_sfs_climo_from_reforecast.py",
+                    "--model",       _model,
+                    "--local-var",   _var,
+                    "--input-dir",   f"{_hind_root}/{_var}",
+                    "--output-file", _out,
+                    "--start-year",  "1991",
+                    "--end-year",    str(_spec["end_year"]),
+                ])
+
+        if _climo_cmds:
+            stage_cmds["climatology"] = _climo_cmds
+        else:
+            print("[INFO] All climo files already exist; skipping climatology stage")
 
     # ---------- Terciles (optional static stage) ----------
     if "terciles" in args.stages and args.system == "nmme":
@@ -168,9 +214,9 @@ def main() -> int:
             "python",
             "static/precompute_tercile_thresholds.py",
             "--config", args.config,
-            "--hindcast-root", "/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full",
-            "--sfs-hindcast-root", "/data/esplab/nmme-backup/NOAA-SFS/reforecast",
-            "--outdir", "tercile_thresholds",
+            "--hindcast-root", "/data/esplab/nmme-backup",
+            "--sfs-hindcast-root", "/data/esplab/nmme-backup/NOAA-SFS/reforecast/prec",
+            "--outdir", "/data/esplab/shared/model/initialized/nmme/terciles/1991-2020",
         ]
         stage_cmds["terciles"] = cmd
 
