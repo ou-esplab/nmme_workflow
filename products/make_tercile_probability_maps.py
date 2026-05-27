@@ -992,17 +992,21 @@ def main() -> int:
                 # -------------------------------------------------------------
                 # Core tercile probabilities (existing workflow)
                 # -------------------------------------------------------------
-                prob = compute_region_probabilities(
-                    ds_fc,
-                    args.init,
-                    var,
-                    season,
-                    lat_bounds,
-                    lon_bounds,
-                    hind_root,
-                    sfs_hind_root,
-                    model_names=configured_models,
-                )
+                try:
+                    prob = compute_region_probabilities(
+                        ds_fc,
+                        args.init,
+                        var,
+                        season,
+                        lat_bounds,
+                        lon_bounds,
+                        hind_root,
+                        sfs_hind_root,
+                        model_names=configured_models,
+                    )
+                except RuntimeError as e:
+                    print(f"[WARN] Skipping {rname} {season} {var}: {e}")
+                    continue
 
                 out_nc = tercile_outdir / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"
                 xr.Dataset(prob).to_netcdf(out_nc)
