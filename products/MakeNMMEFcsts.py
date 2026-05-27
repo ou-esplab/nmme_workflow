@@ -81,14 +81,14 @@ def main() -> int:
         )
     )
 
-    out_root = Path(cfg["data"]["output"]["nmme_monthly"])
+    forecast_root = Path(cfg["data"]["output"]["nmme_forecast"])
     fcst_yyyymm = fcstdate.strftime("%Y%m")
-    figpath = out_root / fcst_yyyymm / "images" / "anomalies"
+    figpath = forecast_root / fcst_yyyymm / "images" / "anomalies"
 
     print(f"[INFO] Forecast init: {fcstdate:%Y-%m}")
     print(f"[INFO] Data root: {data_root}")
     print(f"[INFO] Climatology root: {clim_root}")
-    print(f"[INFO] Output base: {out_root}")
+    print(f"[INFO] Output base: {forecast_root}")
     print(f"[INFO] Dry-run mode: {args.dry_run}")
 
     if not args.dry_run:
@@ -99,7 +99,8 @@ def main() -> int:
     ds_fcst = build_mme_for_month(
         data_root=data_root,
         clim_root=clim_root,
-        init_yyyymm=fcst_yyyymm
+        init_yyyymm=fcst_yyyymm,
+        mask_path=land_ocean_mask,
     )
 
     if args.dry_run:
@@ -109,7 +110,7 @@ def main() -> int:
     else:
         nmme_plot(ds_fcst, figpath, land_mask_path=land_ocean_mask)
         assert "valid" in ds_fcst.coords, ds_fcst.coords
-        nmme_write(ds_fcst, fcst_yyyymm)
+        nmme_write(ds_fcst, fcst_yyyymm, forecast_root=str(forecast_root))
         print(f"[INFO] Products written for {fcst_yyyymm}")
 
     return 0

@@ -18,7 +18,6 @@ Assumes lead 0 corresponds to the initialization month.
 """
 
 import argparse
-import glob
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -66,9 +65,6 @@ SEASON_MONTHS: Dict[str, Tuple[int, ...]] = {
     "JJA": (6, 7, 8),
     "ASO": (8, 9, 10),
     "NDJ": (11, 12, 1),
-    "Apr-Jul": (4, 5, 6, 7),
-    "Apr-Sep": (4, 5, 6, 7, 8, 9),
-    "Oct-Jan": (10, 11, 12, 1),
 }
 
 VAR_META = {
@@ -110,7 +106,7 @@ def parse_args() -> argparse.Namespace:
         default="ALL",
         help=(
             "Comma-separated seasons from "
-            "{MAM,AMJ,MJJ,JJA,ASO,NDJ,Apr-Jul,Apr-Sep,Oct-Jan}; "
+            "{MAM,AMJ,MJJ,JJA,ASO,NDJ}; "
             "use ALL for all"
         ),
     )
@@ -224,39 +220,25 @@ def safe_contour_levels(da: xr.DataArray, n: int = 7) -> np.ndarray:
 def load_forecast(init_yyyymm: str, out_root: Path) -> Dict[str, xr.Dataset]:
     """Load makefcsts-produced anomaly ensemble-mean forecast files for configured vars."""
     def _load(var: str) -> xr.Dataset:
+        file_var = FORECAST_VAR_TO_TERCILE_VAR.get(var, var)
         fpath = (
             out_root
             / init_yyyymm
             / "data"
-            / f"NMME_fcst_{init_yyyymm}.anom.monthly.{var}.emean.nc"
+            / "monthly"
+            / f"NMME_fcst_{init_yyyymm}.anom.monthly.{file_var}.emean.nc"
         )
         if not fpath.exists():
             raise FileNotFoundError(f"Forecast file not found: {fpath}")
-        return xr.open_dataset(fpath)
+        ds = xr.open_dataset(fpath)
+        # nmme_write stores monthly files with 'time' dim (valid dates); rename to
+        # 'lead' so positional indexing in compute_region_probabilities works correctly.
+        if "time" in ds.dims and "lead" not in ds.dims:
+            ds = ds.rename({"time": "lead"})
+        return ds
 
     return {var: _load(var) for var in TERCILE_FORECAST_VARS}
 
-
-def load_realtime_hindcast_precip(model: str, init_month: int) -> xr.DataArray:
-    """
-    Load raw precipitation hindcast files used only for the precip-only
-    seasonal-total summary product.
-    """
-    files = sorted(
-        glob.glob(
-            f"/data/esplab/nmme-backup/{model}/hindcast/prec/"
-            f"prec_{model}_*_{init_month:02d}.nc"
-        )
-    )
-
-    if not files:
-        raise FileNotFoundError(
-            f"No precip hindcast files found for model={model}, init_month={init_month:02d}"
-        )
-
-    ds = xr.open_mfdataset(files, combine="by_coords", decode_times=False)
-    da = normalize_nmme_dims(ds["prec"])
-    return to_0360(da)
 
 
 def hindcast_thresholds_for_model(
@@ -430,25 +412,48 @@ def compute_region_probabilities(
     return prob
 
 
-def compute_multimodel_threshold_maps(
+def compute_multimodel_thresholds_and_climo(
     forecast_var: str,
     season: str,
+    init_yyyymm: str,
     lat_bounds: Tuple[float, float],
     lon_bounds: Tuple[float, float],
     hind_root: Path,
     sfs_hind_root: Path,
     model_names: Iterable[str],
-) -> Tuple[xr.DataArray, xr.DataArray]:
+    climo_dir: Path,
+) -> Tuple[xr.DataArray, xr.DataArray, "xr.DataArray | None"]:
     """
-    Compute multimodel-mean T33/T66 threshold maps from precomputed hindcast terciles.
-    Works for both prec and tref.
+    Compute multimodel-mean T33/T66 threshold maps from precomputed hindcast terciles,
+    and (for prec only) the multimodel-mean climatological seasonal mean.
+
+    Only models that have a climo file in climo_dir are included in any
+    calculation, ensuring all products are computed from a consistent model set.
+
+    Returns
+    -------
+    t33_mme, t66_mme : xr.DataArray
+        Multimodel-mean anomaly thresholds (mm/day for prec, °C for tref).
+    climo_mme : xr.DataArray or None
+        Multimodel-mean climatological seasonal-mean daily rate (mm/day).
+        None for variables other than prec.
     """
     tercile_var = FORECAST_VAR_TO_TERCILE_VAR[forecast_var]
+    init_month = int(init_yyyymm[4:])
+    l0, l1 = get_season_leads(init_yyyymm, season)
 
-    t33_all = []
-    t66_all = []
+    t33_all: list = []
+    t66_all: list = []
+    climo_all: list = []
 
     for model_name in model_names:
+        # Require a climo file for every model so all products are computed
+        # from the same consistent set of models.
+        climo_path = climo_dir / f"{model_name}.{tercile_var}.clim.1991-2020.nc"
+        if not climo_path.exists():
+            print(f"[INFO] Skipping {model_name}: no climo file ({climo_path.name})")
+            continue
+
         try:
             t33, t66 = hindcast_thresholds_for_model(
                 model_name,
@@ -461,6 +466,21 @@ def compute_multimodel_threshold_maps(
             )
             t33_all.append(t33)
             t66_all.append(t66)
+
+            # Load climatological seasonal mean for prec seasonal-total conversion.
+            if forecast_var == "prec":
+                ds_climo = xr.open_dataset(climo_path)
+                # 'prec' is the variable name regardless of the level-suffix in the filename.
+                climo_sea = (
+                    ds_climo["prec"]
+                    .sel(month=init_month)
+                    .isel(lead=slice(l0, l1))
+                    .mean("lead")
+                )
+                climo_sea = to_0360(climo_sea)
+                climo_all.append(subset_region(climo_sea, lat_bounds, lon_bounds))
+                ds_climo.close()
+
         except (FileNotFoundError, RuntimeError) as e:
             print(f"[WARN] Threshold map skipping {model_name}: {e}")
 
@@ -469,62 +489,44 @@ def compute_multimodel_threshold_maps(
             f"No threshold maps available for var={forecast_var}, season={season}"
         )
 
-    t33_mean = xr.concat(t33_all, dim="model", coords="minimal", compat="override").mean("model")
-    t66_mean = xr.concat(t66_all, dim="model", coords="minimal", compat="override").mean("model")
+    t33_mme = xr.concat(t33_all, dim="model", coords="minimal", compat="override").mean("model")
+    t66_mme = xr.concat(t66_all, dim="model", coords="minimal", compat="override").mean("model")
 
-    return t33_mean, t66_mean
+    climo_mme = None
+    if climo_all:
+        climo_mme = xr.concat(climo_all, dim="model", coords="minimal", compat="override").mean("model")
+
+    return t33_mme, t66_mme, climo_mme
 
 
-def compute_multimodel_precip_seasonal_total_stats(
-    init_yyyymm: str,
-    season: str,
-    lat_bounds: Tuple[float, float],
-    lon_bounds: Tuple[float, float],
-    model_names: Iterable[str],
-    days_per_lead: int = 30,
+def seasonal_total_from_thresholds(
+    t33_anomaly: xr.DataArray,
+    t66_anomaly: xr.DataArray,
+    climo_mean: xr.DataArray,
+    n_months: int,
+    days_per_month: int = 30,
 ) -> Tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
     """
-    Compute precip-only seasonal total summary from raw hindcasts:
-      - mean seasonal total
-      - lower tercile of seasonal total
-      - upper tercile of seasonal total
+    Convert anomaly thresholds (mm/day) + climatological mean (mm/day) to
+    seasonal totals (mm/season).
+
+    The anomaly T33/T66 thresholds represent the seasonal-mean daily rate at
+    which the 33rd/66th percentile of hindcast years falls.  Adding the
+    climatological mean converts from anomaly space to absolute space.
+    Multiplying by (days_per_month × n_months) converts from daily rate to
+    accumulated seasonal total.
+
+    Returns
+    -------
+    mean_total : mean climatological seasonal total (mm/season)
+    t33_total  : lower-tercile seasonal total (mm/season)
+    t66_total  : upper-tercile seasonal total (mm/season)
     """
-    init_month = int(init_yyyymm[4:])
-    l0, l1 = get_season_leads(init_yyyymm, season)
-
-    mean_all = []
-    t33_all = []
-    t66_all = []
-
-    for model_name in model_names:
-        try:
-            hc = load_realtime_hindcast_precip(model_name, init_month)
-
-            hc_subset = hc.isel(lead=slice(l0, l1))
-            hc_total = (hc_subset * days_per_lead).sum("lead")
-
-            sample = hc_total.stack(sample=("init", "ens"))
-            t33 = sample.quantile(0.33, "sample").squeeze(drop=True).reset_coords(drop=True)
-            t66 = sample.quantile(0.66, "sample").squeeze(drop=True).reset_coords(drop=True)
-            mean_field = hc_total.mean(dim=("init", "ens"), skipna=True)
-
-            mean_all.append(subset_region(mean_field, lat_bounds, lon_bounds))
-            t33_all.append(subset_region(t33, lat_bounds, lon_bounds))
-            t66_all.append(subset_region(t66, lat_bounds, lon_bounds))
-
-        except FileNotFoundError as e:
-            print(f"[WARN] Seasonal-total precip skipping {model_name}: {e}")
-
-    if not mean_all:
-        raise RuntimeError(
-            f"No precip hindcasts available for seasonal-total stats: season={season}"
-        )
-
-    mean_field = xr.concat(mean_all, dim="model", coords="minimal", compat="override").mean("model")
-    t33_mean = xr.concat(t33_all, dim="model", coords="minimal", compat="override").mean("model")
-    t66_mean = xr.concat(t66_all, dim="model", coords="minimal", compat="override").mean("model")
-
-    return mean_field, t33_mean, t66_mean
+    scale = float(days_per_month * n_months)
+    mean_total = climo_mean * scale
+    t33_total = (t33_anomaly + climo_mean) * scale
+    t66_total = (t66_anomaly + climo_mean) * scale
+    return mean_total, t33_total, t66_total
 
 
 def plot_probabilities(
@@ -917,8 +919,7 @@ def main() -> int:
     args = parse_args()
 
     cfg = load_config(args.config)
-    monthly_root = Path(cfg["data"]["output"]["nmme_monthly"])
-    seasonal_root = Path(cfg["data"]["output"]["nmme_seasonal"])
+    forecast_root = Path(cfg["data"]["output"]["nmme_forecast"])
     hind_root = Path("/data/esplab/shared/model/initialized/nmme/hindcast/monthly/prec/monthly/full")
     sfs_hind_root = (
         Path(
@@ -927,6 +928,11 @@ def main() -> int:
             .get("climo_input_dir", "/data/esplab/nmme-backup/NOAA-SFS/reforecast")
         )
         / "prec"
+    )
+    climo_dir = Path(
+        cfg.get("pipeline", {})
+        .get("sfs", {})
+        .get("climo_output_dir", "/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020")
     )
 
     if args.seasons.upper() == "ALL":
@@ -937,7 +943,7 @@ def main() -> int:
         if bad:
             raise ValueError(f"Unsupported seasons: {bad}. Allowed: {list(SEASON_MONTHS)}")
 
-    ds_fc_dict = load_forecast(args.init, monthly_root)
+    ds_fc_dict = load_forecast(args.init, forecast_root)
     regions = cfg.get("pycpt_regions", [])
     configured_models = cfg.get("models", [])
     if not regions:
@@ -951,12 +957,12 @@ def main() -> int:
         if not regions:
             raise ValueError(f"No matching regions for --regions={args.regions}")
 
-    # NetCDF outputs go to the seasonal data directory.
-    tercile_outdir = seasonal_root / args.init / "data" / "terciles"
+    # NetCDF outputs go to the forecast tercile_probs data directory.
+    tercile_outdir = forecast_root / args.init / "data" / "tercile_probs"
     tercile_outdir.mkdir(parents=True, exist_ok=True)
 
     # Image outputs can be redirected with --outdir.
-    image_root = Path(args.outdir) if args.outdir else (seasonal_root / args.init / "images")
+    image_root = Path(args.outdir) if args.outdir else (forecast_root / args.init / "images")
     image_root.mkdir(parents=True, exist_ok=True)
 
     for var, ds_fc in ds_fc_dict.items():
@@ -1001,17 +1007,22 @@ def main() -> int:
                 print(f"[INFO] Wrote {out_png}")
 
                 # -------------------------------------------------------------
-                # New 2-panel threshold maps (prec + tref)
+                # Threshold maps (anomaly units, prec + tref) and, for prec,
+                # seasonal-total summary (absolute units).
+                # Both are derived in one pass from precomputed tercile files
+                # + climatology files — no raw hindcast reading required.
                 # -------------------------------------------------------------
                 try:
-                    t33_map, t66_map = compute_multimodel_threshold_maps(
+                    t33_map, t66_map, climo_mme = compute_multimodel_thresholds_and_climo(
                         var,
                         season,
+                        args.init,
                         lat_bounds,
                         lon_bounds,
                         hind_root,
                         sfs_hind_root,
                         model_names=configured_models,
+                        climo_dir=climo_dir,
                     )
 
                     out_png = (
@@ -1030,11 +1041,36 @@ def main() -> int:
                         out_png,
                     )
                     print(f"[INFO] Wrote {out_png}")
+
+                    # Seasonal-total summary: convert anomaly thresholds to
+                    # absolute mm/season using the climatological mean.
+                    if var == "prec" and climo_mme is not None:
+                        l0, l1 = get_season_leads(args.init, season)
+                        mean_total, t33_total, t66_total = seasonal_total_from_thresholds(
+                            t33_map, t66_map, climo_mme, n_months=l1 - l0
+                        )
+                        out_png = (
+                            image_root
+                            / "seasonal_total_summary"
+                            / rname
+                            / f"NMME_{args.init}_{rname}_{season}_{var}_seasonal_total_summary.png"
+                        )
+                        plot_precip_seasonal_total_summary(
+                            mean_total,
+                            t33_total,
+                            t66_total,
+                            rname,
+                            season,
+                            args.init,
+                            out_png,
+                        )
+                        print(f"[INFO] Wrote {out_png}")
+
                 except Exception as e:
-                    print(f"[WARN] Failed threshold maps for {rname} {season} {var}: {e}")
+                    print(f"[WARN] Failed threshold/seasonal-total maps for {rname} {season} {var}: {e}")
 
                 # -------------------------------------------------------------
-                # New most-likely tercile map (prec + tref)
+                # Most-likely tercile map (prec + tref)
                 # -------------------------------------------------------------
                 try:
                     out_png = (
@@ -1056,7 +1092,7 @@ def main() -> int:
                     print(f"[WARN] Failed most-likely plot for {rname} {season} {var}: {e}")
 
                 # -------------------------------------------------------------
-                # New CPT-style dominant-category map (prec + tref)
+                # CPT-style dominant-category map (prec + tref)
                 # -------------------------------------------------------------
                 try:
                     out_png = (
@@ -1076,38 +1112,6 @@ def main() -> int:
                     print(f"[INFO] Wrote {out_png}")
                 except Exception as e:
                     print(f"[WARN] Failed CPT dominant plot for {rname} {season} {var}: {e}")
-
-                # -------------------------------------------------------------
-                # New precip-only seasonal total summary
-                # -------------------------------------------------------------
-                if var == "prec":
-                    try:
-                        mean_field, t33_total, t66_total = compute_multimodel_precip_seasonal_total_stats(
-                            args.init,
-                            season,
-                            lat_bounds,
-                            lon_bounds,
-                            model_names=configured_models,
-                        )
-
-                        out_png = (
-                            image_root
-                            / "seasonal_total_summary"
-                            / rname
-                            / f"NMME_{args.init}_{rname}_{season}_{var}_seasonal_total_summary.png"
-                        )
-                        plot_precip_seasonal_total_summary(
-                            mean_field,
-                            t33_total,
-                            t66_total,
-                            rname,
-                            season,
-                            args.init,
-                            out_png,
-                        )
-                        print(f"[INFO] Wrote {out_png}")
-                    except Exception as e:
-                        print(f"[WARN] Failed seasonal-total precip summary for {rname} {season}: {e}")
 
     return 0
 

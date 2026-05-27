@@ -97,8 +97,7 @@ PUBLISH_UPDATE_HTML="$(to_bool01 "$PUBLISH_UPDATE_HTML")"
 PUBLISH_COPY_STATIC_ONCE="$(to_bool01 "$PUBLISH_COPY_STATIC_ONCE")"
 PUBLISH_COPY_STATIC_FORCE="$(to_bool01 "$PUBLISH_COPY_STATIC_FORCE")"
 
-MONTHLY_ROOT="${NMME_MONTHLY_ROOT:-$(cfg_get 'data.output.nmme_monthly' '/data/esplab/shared/model/initialized/nmme/forecast/monthly')}"
-SEASONAL_ROOT="${NMME_SEASONAL_ROOT:-$(cfg_get 'data.output.nmme_seasonal' '/data/esplab/shared/model/initialized/nmme/forecast/seasonal')}"
+FORECAST_ROOT="${NMME_FORECAST_ROOT:-$(cfg_get 'data.output.nmme_forecast' '/data/esplab/shared/model/initialized/nmme/forecast')}"
 
 if [[ "$PUBLISH_ENABLED" != "1" ]]; then
   echo "[INFO] publish stage disabled; skipping"
@@ -108,8 +107,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ssh_key_expanded="${PUBLISH_SSH_KEY/#\~/$HOME}"
 
-sourceDirMon="${MONTHLY_ROOT}/${fcstdate}"
-sourceDirSeas="${SEASONAL_ROOT}/${fcstdate}"
+sourceDir="${FORECAST_ROOT}/${fcstdate}"
 
 if [[ -z "$PUBLISH_HINDCASTS_DEST_DIR" ]]; then
   if [[ "$PUBLISH_DEST_DIR" == */forecasts ]]; then
@@ -129,8 +127,7 @@ if [[ -f "/home/${USER}/miniconda3/etc/profile.d/conda.sh" ]]; then
 fi
 
 timeout=60
-while (( timeout > 0 )) && { [[ -f "${sourceDirMon}/nmmefcst.lock" ]] || [[ -f "${sourceDirSeas}/nmmefcst.lock" ]]; }
-do
+while (( timeout > 0 )) && [[ -f "${sourceDir}/nmmefcst.lock" ]]; do
   sleep 60
   ((timeout -= 1))
 done
@@ -142,6 +139,9 @@ fi
 
 run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
   "mkdir -p \
+      ${PUBLISH_DEST_DIR}/data/${fcstdate}/monthly \
+      ${PUBLISH_DEST_DIR}/data/${fcstdate}/seasonal \
+      ${PUBLISH_DEST_DIR}/data/${fcstdate}/tercile_probs \
       ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global \
       ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America \
       ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela \
@@ -149,33 +149,64 @@ run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
       ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Mexico \
       ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Venezuela \
       ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Iran \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Mexico"
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Mexico \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/threshold_maps/Venezuela \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/threshold_maps/Iran \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/threshold_maps/Mexico \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/most_likely/Venezuela \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/most_likely/Iran \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/most_likely/Mexico \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/cpt_dominant/Venezuela \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/cpt_dominant/Iran \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/cpt_dominant/Mexico \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/seasonal_total_summary/Venezuela \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/seasonal_total_summary/Iran \
+      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/seasonal_total_summary/Mexico"
 
 if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
-  if [[ -d "${sourceDirMon}/images/anomalies" ]]; then
-      # Copy monthly forecast images organized by region
-      # Global images
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Global/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global/" 2>/dev/null || true
-      # North America images
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/NorthAmerica/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America/" 2>/dev/null || true
-      # Venezuela images
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Venezuela/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela/" 2>/dev/null || true
-      # Iran images
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Iran/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran/" 2>/dev/null || true
-      # Mexico images
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDirMon}"/images/anomalies/Mexico/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Mexico/" 2>/dev/null || true
+  # Copy monthly anomaly NetCDF data files
+  if [[ -d "${sourceDir}/data/monthly" ]]; then
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/data/monthly/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/data/${fcstdate}/monthly/" 2>/dev/null || true
+  fi
+
+  # Copy monthly forecast images organized by region
+  if [[ -d "${sourceDir}/images/anomalies" ]]; then
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Global/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global/" 2>/dev/null || true
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/NorthAmerica/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America/" 2>/dev/null || true
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Venezuela/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela/" 2>/dev/null || true
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Iran/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran/" 2>/dev/null || true
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Mexico/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Mexico/" 2>/dev/null || true
   fi
 fi
 
 if [[ "$PUBLISH_COPY_SEASONAL" == "1" ]]; then
-  if [[ -d "${sourceDirSeas}/images/terciles" ]]; then
-      # Copy seasonal tercile maps organized by region
+  # Copy seasonal anomaly and tercile probability NetCDF data files
+  if [[ -d "${sourceDir}/data/seasonal" ]]; then
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/data/seasonal/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/data/${fcstdate}/seasonal/" 2>/dev/null || true
+  fi
+  if [[ -d "${sourceDir}/data/tercile_probs" ]]; then
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/data/tercile_probs/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/data/${fcstdate}/tercile_probs/" 2>/dev/null || true
+  fi
+
+  # Copy seasonal tercile probability maps organized by region
+  if [[ -d "${sourceDir}/images/tercile_probs" ]]; then
       for region in Venezuela Iran Mexico; do
-        if [[ -d "${sourceDirSeas}/images/terciles/${region}" ]]; then
-          run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDirSeas}/images/terciles/${region}/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${region}/"
+        if [[ -d "${sourceDir}/images/tercile_probs/${region}" ]]; then
+          run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDir}/images/tercile_probs/${region}/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${region}/"
         fi
       done
   fi
+
+  # Copy additional seasonal image products (threshold_maps, most_likely, cpt_dominant, seasonal_total_summary)
+  for product in threshold_maps most_likely cpt_dominant seasonal_total_summary; do
+    for region in Venezuela Iran Mexico; do
+      if [[ -d "${sourceDir}/images/${product}/${region}" ]]; then
+        run_cmd scp -r -i "${ssh_key_expanded}" \
+          "${sourceDir}/images/${product}/${region}/." \
+          "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${product}/${region}/"
+      fi
+    done
+  done
 fi
 
 if [[ "$PUBLISH_UPDATE_HTML" == "1" ]]; then

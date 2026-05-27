@@ -13,6 +13,7 @@ from utils.nmme_io import (
 )
 from utils.nmme_utils import decode_cf_safe
 from utils.nmme_normalize import normalize_forecast_dataset
+from utils.interp import interp_to_target_grid
 
 DEBUG_ANOM = os.getenv("NMME_DEBUG", "0") == "1"
 
@@ -81,6 +82,27 @@ def _latlon_dims(da):
     lon_dim = "lon" if "lon" in da.sizes else "longitude" if "longitude" in da.sizes else None
     return lat_dim, lon_dim
 
+
+def _load_mask_grid(mask_path: Optional[str]) -> Optional[xr.DataArray]:
+    if not mask_path:
+        return None
+    try:
+        ds = xr.open_dataset(mask_path)
+    except Exception as exc:
+        print(f"[WARN] Could not open mask '{mask_path}': {exc}")
+        return None
+    da = ds[list(ds.data_vars)[0]].load()
+    ds.close()
+    if "latitude" in da.dims and "lat" not in da.dims:
+        da = da.rename({"latitude": "lat"})
+    if "longitude" in da.dims and "lon" not in da.dims:
+        da = da.rename({"longitude": "lon"})
+    if not {"lat", "lon"}.issubset(da.dims):
+        print(f"[WARN] Mask '{mask_path}' missing lat/lon dims.")
+        return None
+    return da
+
+
 def model_anomalies_for_month(
     data_root: Path,
     clim_root: Path,
@@ -88,6 +110,7 @@ def model_anomalies_for_month(
     varname: str,
     levstr: str,
     init_yyyymm: str,
+    mask_path: Optional[str] = None,
 ) -> Optional[xr.Dataset]:
     """
     Compute anomalies for ONE (model, variable, init month).
@@ -243,6 +266,18 @@ def model_anomalies_for_month(
 
     fcst_da = normalize_forecast_for_anomaly_math(fcst_da)
     clim_da = clim_da.reset_coords(drop=True)
+
+    if model == "NOAA-SFS":
+        target_grid = _load_mask_grid(mask_path)
+        if target_grid is not None:
+            fcst_da = interp_to_target_grid(fcst_da, target_grid)
+            clim_da = interp_to_target_grid(clim_da, target_grid)
+            fcst_da = fcst_da.rename({"Y": "lat", "X": "lon"})
+            clim_da = clim_da.rename({"Y": "lat", "X": "lon"})
+        else:
+            print(
+                "[WARN] NOAA-SFS mask_path unavailable; keeping native SFS grid"
+            )
 
     fcst_da_aligned, clim_da_aligned = xr.align(
         fcst_da,

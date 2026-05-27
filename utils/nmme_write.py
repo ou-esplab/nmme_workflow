@@ -5,6 +5,47 @@ import xarray as xr
 from utils.nmme_metadata import init_models
 
 
+def _build_var_level_map() -> dict:
+    models, _, _, _ = init_models()
+    var_level = {}
+    for model in models:
+        for varname, levstr in zip(model["varnames"], model["levstrs"]):
+            if varname not in var_level:
+                var_level[varname] = levstr
+    return var_level
+
+
+def _file_var_token(varname: str, var_level: dict) -> str:
+    levstr = var_level.get(varname)
+    if levstr:
+        return f"{varname}_{levstr}"
+    return varname
+
+
+def _monthly_with_time_dim(ds: xr.Dataset, valid: xr.DataArray | None) -> xr.Dataset:
+    if "lead" not in ds.dims:
+        return ds
+
+    if valid is None:
+        return ds.rename({"lead": "time"})
+
+    valid_attrs = dict(valid.attrs)
+    if valid.ndim > 1:
+        valid = valid.isel({valid.dims[0]: 0}, drop=True)
+    ds = ds.assign_coords(time=("lead", valid.values))
+    ds = ds.swap_dims({"lead": "time"})
+    ds = ds.drop_vars("lead", errors="ignore")
+    ds = ds.drop_vars("valid", errors="ignore")
+
+    ds["time"].attrs["standard_name"] = "time"
+    ds["time"].attrs["long_name"] = "Forecast Valid Month"
+    if "units" in valid_attrs:
+        ds["time"].attrs["units"] = valid_attrs["units"]
+    if "calendar" in valid_attrs:
+        ds["time"].attrs["calendar"] = valid_attrs["calendar"]
+    return ds
+
+
 def rolling_seasonal_means(ds, window=3):
     """
     ds: Dataset or DataArray with dimension 'lead'
@@ -53,7 +94,7 @@ def _normalize_spatial_coords(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
-def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
+def nmme_write(ds_fcst: xr.Dataset, fcstdate: str, forecast_root: str | None = None):
     """
     Write monthly and seasonal NMME ensemble-mean products.
 
@@ -77,8 +118,11 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
             f"No lead dimension in ds_fcst (dims={ds_fcst.dims})"
         )
 
+    _forecast_root = forecast_root or "/data/esplab/shared/model/initialized/nmme/forecast"
+
     # Metadata
     _, _, _, unit_map = init_models()
+    var_level = _build_var_level_map()
 
     # ---------------------------
     # Drive products from DATA, not config
@@ -101,6 +145,7 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
         ds_model_list = []
 
         da = ds_fcst[v_ens]
+        valid = da.coords["valid"] if "valid" in da.coords else None
 
         # ---------------------------
         # Model loop (data-driven)
@@ -138,18 +183,20 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
                 .sortby("lon")
             )
 
+        ds_mon = _monthly_with_time_dim(ds_models, valid)
+        file_token = _file_var_token(v, var_level)
+
         ofname_mon = (
-            f"/data/esplab/shared/model/initialized/nmme/forecast/monthly/"
-            f"{fcstdate}/data/"
-            f"NMME_fcst_{fcstdate}.anom.monthly.{v}.emean.nc"
+            f"{_forecast_root}/"
+            f"{fcstdate}/data/monthly/"
+            f"NMME_fcst_{fcstdate}.anom.monthly.{file_token}.emean.nc"
         )
         os.makedirs(os.path.dirname(ofname_mon), exist_ok=True)
-        ds_models.to_netcdf(ofname_mon)
+        ds_mon.to_netcdf(ofname_mon)
 
         # ---------------------------
         # SEASONAL OUTPUT (derived from valid)
         # ---------------------------
-        
 
         # Compute seasonal means from this variable-only dataset.
         # Avoid recomputing all variables repeatedly inside the loop.
@@ -157,9 +204,9 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str):
         ds_seas["season"].attrs["long_name"] = "Forecast Valid Season"
 
         ofname_seas = (
-            f"/data/esplab/shared/model/initialized/nmme/forecast/seasonal/"
-            f"{fcstdate}/data/"
-            f"NMME_fcst_{fcstdate}.anom.seas.{v}.emean.nc"
+            f"{_forecast_root}/"
+            f"{fcstdate}/data/seasonal/"
+            f"NMME_fcst_{fcstdate}.anom.seas.{file_token}.emean.nc"
         )
         os.makedirs(os.path.dirname(ofname_seas), exist_ok=True)
         ds_seas.to_netcdf(ofname_seas)

@@ -83,8 +83,7 @@ data:
   # Output locations
   output:
     pycpt: /data/esplab/shared/model/initialized/nmme/forecast/pycpt
-    nmme_monthly: /data/esplab/shared/model/initialized/nmme/forecast/monthly
-    nmme_seasonal: /data/esplab/shared/model/initialized/nmme/forecast/seasonal
+    nmme_forecast: /data/esplab/shared/model/initialized/nmme/forecast
 
 
 # ------------------------------------------------------------
@@ -127,15 +126,15 @@ pipeline:
     copy_monthly: true
     copy_seasonal: true
     copy_latest: true
-    update_html: true
+    update_html: false
     dest_host: somclass23
-    dest_dir: /data/web/kpegion/http/nmme/forecasts
+    dest_dir: /data/web/kpegion/http/nmme/forecasts_test
     ssh_key: ~/.ssh/id_ed25519
     copy_static_once: true
     copy_static_force: false
     static_climatology_source: /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020
     static_terciles_source: /data/esplab/shared/model/initialized/nmme/terciles/1991-2020
-    hindcasts_dest_dir: /data/web/kpegion/http/nmme/hindcasts
+    hindcasts_dest_dir: /data/web/kpegion/http/nmme/hindcasts_test
 
 
 # ------------------------------------------------------------

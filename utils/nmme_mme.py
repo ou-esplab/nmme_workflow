@@ -12,6 +12,7 @@ def build_mme_for_month(
     data_root: Path,
     clim_root: Path,
     init_yyyymm: str,
+    mask_path: str | None = None,
 ) -> xr.Dataset:
     """
     Build per-model anomalies and the MME for one initialization month.
@@ -51,6 +52,7 @@ def build_mme_for_month(
                 varname=var,
                 levstr=lev,
                 init_yyyymm=init_yyyymm,
+                mask_path=mask_path,
             )
 
             print(
