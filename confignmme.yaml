@@ -25,22 +25,22 @@ regions:
   - name: CONUS
     lat: [24, 50]
     lon: [-125, -66]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
 
   - name: Mexico
     lat: [20, 33]
     lon: [-118, -97]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
 
   - name: Iran
     lat: [24, 40]
     lon: [40, 64]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
 
   - name: Venezuela
     lat: [0, 13]
     lon: [-73, -60]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
 
 
 # ------------------------------------------------------------

@@ -58,14 +58,21 @@ TERCILE_FORECAST_VARS = ("prec", "tref")
 
 # Calendar-month definitions for target seasons.
 # Lead windows are computed dynamically from init month.
+# Seasons may span any number of consecutive months, including year boundaries.
 SEASON_MONTHS: Dict[str, Tuple[int, ...]] = {
-    "MAM": (3, 4, 5),
-    "AMJ": (4, 5, 6),
-    "MJJ": (5, 6, 7),
-    "JJA": (6, 7, 8),
-    "ASO": (8, 9, 10),
-    "NDJ": (11, 12, 1),
+    "MAM":     (3, 4, 5),
+    "AMJ":     (4, 5, 6),
+    "MJJ":     (5, 6, 7),
+    "JJA":     (6, 7, 8),
+    "ASO":     (8, 9, 10),
+    "NDJ":     (11, 12, 1),
+    "Apr-Jul": (4, 5, 6, 7),
+    "Apr-Sep": (4, 5, 6, 7, 8, 9),
+    "Oct-Jan": (10, 11, 12, 1),
 }
+
+# Alias used by precompute_tercile_thresholds.py and runners/cli.py.
+SEASON_LEADS = SEASON_MONTHS
 
 VAR_META = {
     "prec": {

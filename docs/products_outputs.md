@@ -139,6 +139,9 @@ initialization month, so available seasons shift slightly each month.
 | JJA | June – July – August |
 | ASO | August – September – October |
 | NDJ | November – December – January |
+| Apr-Jul | April – May – June – July |
+| Apr-Sep | April – May – June – July – August – September |
+| Oct-Jan | October – November – December – January |
 
 ---
 
