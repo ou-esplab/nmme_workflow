@@ -100,16 +100,17 @@ def main() -> int:
     for f in files:
         if args.verbose:
             print(f"  {f}")
+        # Open with chunks={} so Dask manages memory — avoids allocating the
+        # full (n_inits × leads × members × lat × lon) array at once.
         # Try standard time decoding first; fall back to manual cftime decoding
         # for models with non-standard calendars (e.g., COLA-RSMAS-CESM1 uses a
         # '360' calendar with 'months since' units that xarray cannot decode natively).
         try:
-            ds_i = xr.open_dataset(f, decode_times=True)
+            ds_i = xr.open_dataset(f, decode_times=True, chunks={})
         except Exception:
-            ds_i = xr.open_dataset(f, decode_times=False)
+            ds_i = xr.open_dataset(f, decode_times=False, chunks={})
             ds_i = decode_S_cftime(ds_i)
         if args.verbose:
-            # Print the 'init' coordinate if present when debugging.
             if 'init' in ds_i.coords:
                 print(f"    init: {ds_i['init'].values}")
             else:
