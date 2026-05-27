@@ -935,19 +935,20 @@ def main() -> int:
         .get("climo_output_dir", "/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020")
     )
 
-    if args.seasons.upper() == "ALL":
-        seasons = list(SEASON_MONTHS.keys())
-    else:
+    # Parse --seasons CLI override (used later to override per-region config seasons).
+    if args.seasons.upper() != "ALL":
         seasons = [s.strip() for s in args.seasons.split(",") if s.strip()]
         bad = [s for s in seasons if s not in SEASON_MONTHS]
         if bad:
             raise ValueError(f"Unsupported seasons: {bad}. Allowed: {list(SEASON_MONTHS)}")
+    else:
+        seasons = []  # sentinel: use per-region config seasons
 
     ds_fc_dict = load_forecast(args.init, forecast_root)
-    regions = cfg.get("pycpt_regions", [])
+    regions = cfg.get("regions", [])
     configured_models = cfg.get("models", [])
     if not regions:
-        raise ValueError("No pycpt_regions in config")
+        raise ValueError("No regions defined in config")
     if not configured_models:
         raise ValueError("No models listed in config")
 
@@ -971,7 +972,13 @@ def main() -> int:
             lat_bounds = tuple(reg["lat"])
             lon_bounds = tuple(reg["lon"])
 
-            for season in seasons:
+            # Per-region seasons from config; --seasons CLI flag overrides if provided.
+            if args.seasons.upper() == "ALL":
+                region_seasons = reg.get("seasons", list(SEASON_MONTHS.keys()))
+            else:
+                region_seasons = seasons  # already parsed from CLI above
+
+            for season in region_seasons:
                 print(f"[INFO] Computing {rname} {season} {var}")
                 lead_label = build_target_label(args.init, season)
 

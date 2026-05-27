@@ -66,7 +66,7 @@ def main() -> int:
 
     region_name = args.regname or args.only
     if region_name:
-        region = U.get_region(cfg["pycpt_regions"], region_name)
+        region = U.get_region(cfg.get("pycpt", {}).get("regions", []), region_name)
     elif args.lat_minmax is not None and args.lon_minmax is not None and args.training_season is not None:
         region = {
             "name": "custom",

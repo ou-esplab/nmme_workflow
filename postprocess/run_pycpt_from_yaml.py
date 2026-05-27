@@ -54,11 +54,11 @@ def main() -> int:
         return 2
 
     cfg = load_config(cfg_path)
-    regions = cfg.get("pycpt_regions", [])
+    regions = cfg.get("pycpt", {}).get("regions", [])
     global_models = cfg.get("models", [])
 
     if not regions:
-        print("[ERROR] No pycpt_regions defined in config.", file=sys.stderr)
+        print("[ERROR] No pycpt.regions defined in config.", file=sys.stderr)
         return 3
 
     # Select regions

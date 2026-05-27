@@ -17,36 +17,53 @@ models:
 
 
 # ------------------------------------------------------------
-# PyCPT Regions
+# Forecast Regions
+# Defines regions and seasons for NMME tercile probability products.
+# PyCPT uses these same lat/lon bounds plus its own season string below.
 # ------------------------------------------------------------
-pycpt_regions:
+regions:
+  - name: CONUS
+    lat: [24, 50]
+    lon: [-125, -66]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
+
   - name: Mexico
     lat: [20, 33]
     lon: [-118, -97]
-    season: Feb-Apr
-    models:
-      - NASA-GEOSS2S
-      - CanESM5
-      - GEM5.2-NEMO
-      - NCEP-CFSv2
-      - NCAR-CESM1
-      - COLA-RSMAS-CCSM4
-      - COLA-RSMAS-CESM1
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
 
   - name: Iran
     lat: [24, 40]
     lon: [40, 64]
-    season: Feb-Apr
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
 
   - name: Venezuela
     lat: [0, 13]
     lon: [-73, -60]
-    season: Feb-Apr
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ]
 
-  - name: CONUS
-    lat: [24, 50]
-    lon: [-125, -66]
-    season: Feb-Apr
+
+# ------------------------------------------------------------
+# PyCPT Configuration (used when pycpt stage is active)
+# ------------------------------------------------------------
+pycpt:
+  regions:
+    - name: Mexico
+      season: Feb-Apr
+      models:
+        - NASA-GEOSS2S
+        - CanESM5
+        - GEM5.2-NEMO
+        - NCEP-CFSv2
+        - NCAR-CESM1
+        - COLA-RSMAS-CCSM4
+        - COLA-RSMAS-CESM1
+
+    - name: Iran
+      season: Feb-Apr
+
+    - name: Venezuela
+      season: Feb-Apr
 
 
 # ------------------------------------------------------------
