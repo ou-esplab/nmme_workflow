@@ -6,10 +6,18 @@ Saves thresholds as NetCDF files for fast lookup.
 
 import argparse
 import glob
+import sys
 from pathlib import Path
 import xarray as xr
 import yaml
 import pandas as pd
+
+# Allow running as `python static/precompute_tercile_thresholds.py` from the
+# project root — add project root to sys.path so that `utils` and
+# `products` are importable.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "products"))
+
 from utils.nmme_io import open_monthly_climatology
 from make_tercile_probability_maps import (
     MODEL_DIR_MAP, SEASON_LEADS, to_0360, subset_region
