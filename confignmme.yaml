@@ -43,6 +43,11 @@ pycpt_regions:
     lon: [-73, -60]
     season: Feb-Apr
 
+  - name: CONUS
+    lat: [24, 50]
+    lon: [-125, -66]
+    season: Feb-Apr
+
 
 # ------------------------------------------------------------
 # Data Sources

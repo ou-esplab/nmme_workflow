@@ -1,129 +1,153 @@
-# NMME Workflow: Products and Static Stage Outputs
+# NMME Seasonal Forecast Products Guide
 
-## Products Stage
-
-The products stage runs two scripts: `products/MakeNMMEFcsts.py` and `products/make_tercile_probability_maps.py`.
-
-All per-forecast outputs live under a single date directory:
-
-```
-/data/esplab/shared/model/initialized/nmme/forecast/{YYYYMM}/
-  data/
-    monthly/       ← monthly anomaly NetCDFs
-    seasonal/      ← seasonal anomaly NetCDFs
-    tercile_probs/ ← per-forecast tercile probability NetCDFs
-  images/
-    anomalies/     ← anomaly maps (by region)
-    tercile_probs/ ← tercile probability maps (by region)
-    threshold_maps/
-    most_likely/
-    cpt_dominant/
-    seasonal_total_summary/
-```
+This guide describes the forecast products available on this site and how to interpret them.
 
 ---
 
-### MakeNMMEFcsts.py
+## Overview
 
-Builds multi-model ensemble (MME) anomalies for one initialization month and writes anomaly maps and NetCDF files.
+Forecasts are produced monthly using the **North American Multi-Model Ensemble (NMME)**, a
+collection of coupled climate models from NOAA, NASA, NCAR, and other centers. Combining
+multiple models reduces the uncertainty of any single model and provides a more robust
+probabilistic forecast.
 
-#### Data Files (NetCDF)
+Products are available for:
 
-Base path: `/data/esplab/shared/model/initialized/nmme/forecast/{YYYYMM}/data/`
-
-| Type | Path pattern | Dims | Contents |
-|------|-------------|------|----------|
-| Monthly anomaly | `monthly/NMME_fcst_{YYYYMM}.anom.monthly.{var}_{lev}.emean.nc` | `(model, time, lat, lon)` | Per-model and MME ensemble-mean anomaly. `time` coordinate is the forecast valid month. |
-| Seasonal anomaly | `seasonal/NMME_fcst_{YYYYMM}.anom.seas.{var}_{lev}.emean.nc` | `(model, season_window, lat, lon)` | 3-month rolling means of the monthly anomalies. `season` coordinate labels each window (e.g., `Jun`). |
-
-Variables written: `prec_sfc`, `tref_2m`, `sst_sfc` (and any others present in the preprocessed data).
-
-Each file contains one variable per contributing model plus a `MME` entry (mean across models).
-
-#### Images (PNG)
-
-Base path: `/data/esplab/shared/model/initialized/nmme/forecast/{YYYYMM}/images/anomalies/`
-
-| Region | Variables | Filename pattern |
-|--------|-----------|-----------------|
-| Global | tref, prec, sst | `Global/{VarLabel}GlobalMonth{N}.png` |
-| NorthAmerica | tref, prec, sst | `NorthAmerica/{VarLabel}NorthAmericaMonth{N}.png` |
-| (additional configured regions) | prec | `{Region}/{VarLabel}{Region}Month{N}.png` |
-
-One image per lead month (Month0 = initialization month). Images show the MME ensemble-mean anomaly field.
+- **Variables:** Precipitation, 2-meter Temperature
+- **Regions:** Venezuela, Iran, Mexico
+- **Seasons:** MAM, AMJ, MJJ, JJA, ASO, NDJ (overlapping 3-month windows)
+- **Climatological baseline:** 1991–2020
 
 ---
 
-### make_tercile_probability_maps.py
+## Forecast Products
 
-Computes tercile probabilities for configured regions and seasons against precomputed hindcast thresholds, and writes several map products.
+### 1. Tercile Probability Maps *(primary forecast product)*
 
-Runs over: variables `prec`, `tref`; all configured regions; seasons `MAM`, `AMJ`, `MJJ`, `JJA`, `ASO`, `NDJ`.
+**What it shows:** The probability (%) that the seasonal average will fall in each of three
+categories relative to the 1991–2020 climatology:
 
-#### Data Files (NetCDF)
+| Category | Meaning |
+|----------|---------|
+| **Below Normal (BN)** | The driest/coldest third of historical years |
+| **Near Normal (NN)** | The middle third of historical years |
+| **Above Normal (AN)** | The wettest/warmest third of historical years |
 
-Base path: `/data/esplab/shared/model/initialized/nmme/forecast/{YYYYMM}/data/tercile_probs/`
+Each category has a 33% climatological probability, so values above 40% indicate a meaningful
+forecast signal.
 
-| Filename pattern | Contents |
-|-----------------|----------|
-| `NMME_{YYYYMM}_{Region}_{Season}_{var}_tercile_probs.nc` | BN, NN, AN probability fields (%) on a 1-degree regional grid. Multi-model mean. |
+**How to read it:** Three side-by-side maps, one per category. Darker shading means higher
+probability. A grid point where AN shows 60% means the models collectively give a 60% chance
+of above-normal conditions there for that season.
 
-#### Images (PNG)
-
-Base path: `/data/esplab/shared/model/initialized/nmme/forecast/{YYYYMM}/images/`
-
-| Subdirectory | Filename pattern | Description |
-|-------------|-----------------|-------------|
-| `tercile_probs/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_tercile_probs.png` | 3-panel map showing Below Normal / Near Normal / Above Normal probability (%) at each grid point. The primary tercile forecast product. |
-| `threshold_maps/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_thresholds.png` | 2-panel map of the multi-model-mean precomputed hindcast thresholds T33 and T66. Shows the climatological boundary values that separate BN, NN, and AN — e.g., the precipitation rate below which conditions are considered below-normal for this region and season. |
-| `most_likely/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_most_likely.png` | Single-panel map of the dominant tercile category (highest probability) at each grid point. Grid points where no category exceeds 40% are masked. Simpler to read than the 3-panel tercile probability map. |
-| `cpt_dominant/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_cpt_dominant.png` | CPT-style dominant-category map. Like `most_likely` but shaded using each category's own colormap (Blues=BN, Greens=NN, YlOrRd=AN) with color intensity proportional to probability strength. Masked where dominant probability < 40%. Familiar to users of CPT output. |
-| `seasonal_total_summary/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_prec_seasonal_total_summary.png` | Precip only. 3-panel map of multi-model-mean seasonal total precipitation (mm/season) computed from raw hindcasts: (1) mean seasonal total, (2) lower tercile total T33 (dry threshold), (3) upper tercile total T66 (wet threshold). Provides absolute context for the tercile probability forecasts. |
+**Format:** 3-panel map (BN | NN | AN)
 
 ---
 
-## Static Stage
+### 2. Most-Likely Tercile Map
 
-The static stage is run once (or when hindcast data changes). It produces the climatology and tercile threshold files that the products stage depends on.
+**What it shows:** A simplified single-panel summary of the tercile probability map. Each
+grid point is colored by whichever category has the highest probability. Grid points where
+no category exceeds 40% are left blank (no clear signal).
 
----
-
-### make_sfs_climo_from_reforecast.py (via run_all_climos.sh)
-
-Builds monthly climatologies (1991–2020) for each model and variable from raw hindcast/reforecast files.
-
-#### Data Files (NetCDF)
-
-Base path: `/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020/`
-
-Filename pattern: `{Model}.{var}_{lev}.clim.1991-2020.nc`
-
-| Dims | Contents |
-|------|----------|
-| `(month, lead, lat, lon)` | Ensemble-mean climatological value for each calendar month and lead. |
-
-Models and variables:
-
-| Model | Variables |
-|-------|-----------|
-| NASA-GEOSS2S, CanESM5, GEM5.2-NEMO, NCEP-CFSv2, NCAR-CESM1, COLA-RSMAS-CCSM4, COLA-RSMAS-CESM1 | prec, tref, sst, h500, h200 |
-| NOAA-SFS | prec, tref, sst |
+**How to read it:** Blue = most likely Below Normal; gray = most likely Near Normal;
+red = most likely Above Normal. This is the easiest map to scan for a quick regional picture,
+but use the full tercile probability map to understand the actual probability values.
 
 ---
 
-### precompute_tercile_thresholds.py
+### 3. CPT-Style Dominant Category Map
 
-Computes 33rd and 66th percentile thresholds from hindcast anomalies for each model, variable, and season.
+**What it shows:** The same dominant-category information as the Most-Likely map, but color
+intensity scales with probability strength — a deeper blue means the BN signal is stronger,
+a deeper red means the AN signal is stronger. Grid points where no category exceeds 40%
+are masked.
 
-#### Data Files (NetCDF)
+**How to read it:** The color tells you *which* category dominates; the shade tells you *how
+strongly*. This style is familiar to users of the Climate Predictability Tool (CPT).
 
-Base path: `/data/esplab/shared/model/initialized/nmme/terciles/1991-2020/`
+---
 
-Filename pattern: `{Model}.{var}.{Season}.terciles.1991-2020.nc`
+### 4. Anomaly Maps
 
-| Dims | Contents |
-|------|----------|
-| `(lat, lon)` | `t33` and `t66` threshold fields for the given model/variable/season combination. |
+**What it shows:** The multi-model ensemble mean forecast anomaly — how much warmer/cooler or
+wetter/drier than the 1991–2020 average the models collectively predict for each month or
+season.
 
-Variables: `prec`, `tref`, `sst`
-Seasons: `MAM`, `AMJ`, `MJJ`, `JJA`, `ASO`, `NDJ`
+**How to read it:** Positive anomalies (warm colors for temperature, green for precipitation)
+indicate above-normal predicted conditions. Negative anomalies indicate below-normal
+conditions. These maps do not convey uncertainty — use the tercile probability maps for that.
+
+**Available for:** Monthly leads (Month 0 through Month 8) and 3-month seasonal means.
+Global and regional maps are provided.
+
+---
+
+### 5. Threshold Maps
+
+**What it shows:** The climatological tercile boundaries — the values that separate
+Below Normal from Near Normal (T33) and Near Normal from Above Normal (T66) for each
+grid point and season. These are derived from the 1991–2020 hindcast period.
+
+**How to read it:** The two panels show T33 and T66 in anomaly units (mm/day departure from
+climatology for precipitation; °C departure for temperature). A region with a large spread
+between T33 and T66 has high year-to-year variability; a small spread means most years
+cluster near the mean.
+
+**Purpose:** These thresholds are what the forecast anomalies are compared against to
+produce the tercile probabilities. Viewing them helps understand why a modest anomaly
+forecast can translate to a strong BN or AN signal in some regions.
+
+---
+
+### 6. Seasonal Total Precipitation Summary *(precipitation only)*
+
+**What it shows:** Absolute seasonal precipitation totals (mm/season) rather than anomalies.
+Three panels show: (1) the mean seasonal total, (2) the lower-tercile boundary (T33 — the
+dry threshold), and (3) the upper-tercile boundary (T66 — the wet threshold).
+
+**How to read it:** These values give real-world context to the tercile probabilities. For
+example, if T33 for a region is 150 mm/season, a BN forecast means the models expect less
+than about 150 mm total precipitation that season.
+
+**Purpose:** Complements the anomaly-based products by showing what "below normal" actually
+means in physical units for each region and season.
+
+---
+
+## Regions
+
+| Region | Coverage |
+|--------|---------|
+| CONUS | Contiguous United States (24°N–50°N, 125°W–66°W) |
+| Venezuela | Northern Venezuela and surrounding area |
+| Iran | Iran and neighboring countries |
+| Mexico | Mexico and the southwestern United States |
+
+---
+
+## Seasons
+
+Each season label is a 3-month window. Seasons are computed relative to the forecast
+initialization month, so available seasons shift slightly each month.
+
+| Label | Months |
+|-------|--------|
+| MAM | March – April – May |
+| AMJ | April – May – June |
+| MJJ | May – June – July |
+| JJA | June – July – August |
+| ASO | August – September – October |
+| NDJ | November – December – January |
+
+---
+
+## Data Files
+
+NetCDF files are provided for users who want to work with the forecast data directly.
+
+| File type | Contents |
+|-----------|---------|
+| Monthly anomaly | Multi-model ensemble mean anomaly for each forecast month and model |
+| Seasonal anomaly | 3-month rolling mean of the monthly anomalies |
+| Tercile probabilities | BN, NN, AN probability fields (%) on a 1-degree regional grid |
