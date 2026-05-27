@@ -151,3 +151,72 @@ NetCDF files are provided for users who want to work with the forecast data dire
 | Monthly anomaly | Multi-model ensemble mean anomaly for each forecast month and model |
 | Seasonal anomaly | 3-month rolling mean of the monthly anomalies |
 | Tercile probabilities | BN, NN, AN probability fields (%) on a 1-degree regional grid |
+
+---
+
+## Reference Datasets
+
+The forecast products are computed by comparing each month's model output against two
+precomputed reference datasets derived from the **1991–2020 hindcast period**. These
+datasets are computed once and reused for every forecast.
+
+---
+
+### Climatology
+
+**What it is:** The average model output for each calendar month and forecast lead,
+computed from 30 years of hindcast runs (1991–2020). This is the baseline that defines
+"normal" conditions.
+
+**How it is used:** Each month's raw forecast is subtracted from the climatology to
+produce an *anomaly* — the departure from what the model considers normal. All anomaly
+maps and tercile probability calculations are based on these anomalies.
+
+**Why it matters:** Two models may predict very different absolute values for a region
+but the same anomaly relative to their own climatology. Using anomalies removes
+systematic model biases and puts all models on a common footing before they are
+combined into the multi-model ensemble.
+
+**Available for:** Precipitation, 2-meter temperature, SST, and 200 hPa geopotential
+height for most models; the 1991–2020 period is used as the reference for all variables.
+
+---
+
+### Tercile Thresholds
+
+**What they are:** For each model, variable, season, and grid point, the values that
+divide the 1991–2020 hindcast distribution into three equal thirds:
+
+| Threshold | Meaning |
+|-----------|---------|
+| **T33** | The 33rd percentile of historical anomalies — the boundary between Below Normal and Near Normal |
+| **T66** | The 66th percentile — the boundary between Near Normal and Above Normal |
+
+**How they are used:** Each month's forecast anomaly is compared to T33 and T66 for
+that model. If the anomaly falls below T33 the model "votes" Below Normal; above T66
+it votes Above Normal; between them it votes Near Normal. Averaging these votes across
+all models gives the final BN/NN/AN probabilities.
+
+**Why they are precomputed:** Computing percentiles from 30 years × 10 ensemble
+members of hindcast data is expensive. Doing it once and storing the results means
+each new forecast takes seconds rather than hours.
+
+**Available for:** Precipitation, 2-meter temperature, and SST, for seasons
+MAM, AMJ, MJJ, JJA, ASO, and NDJ.
+
+---
+
+### Models
+
+Hindcast-based reference data is available for the following models:
+
+| Model | Center | Variables |
+|-------|--------|-----------|
+| NASA-GEOSS2S | NASA | prec, tref, sst, h200, h500 |
+| CanESM5 | Environment and Climate Change Canada | prec, tref, sst, h200, h500 |
+| GEM5.2-NEMO | Environment and Climate Change Canada | prec, tref, sst, h200, h500 |
+| NCEP-CFSv2 | NOAA/NCEP | prec, tref, sst, h200, h500 |
+| NCAR-CESM1 | NCAR | prec, tref, sst, h200, h500 |
+| COLA-RSMAS-CCSM4 | COLA/RSMAS | prec, tref, sst, h200, h500 |
+| COLA-RSMAS-CESM1 | COLA/RSMAS | prec, tref, sst, h200 |
+| NOAA-SFS | NOAA | prec, tref, sst |
