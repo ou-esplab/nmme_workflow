@@ -1,4 +1,3 @@
-from utils.nmme_io import decode_S_cftime
 #!/usr/bin/env python3
 """
 Build NOAA-SFS monthly variable climatology from local reforecast files.
@@ -10,9 +9,15 @@ Reference method:
 
 import argparse
 import os
+import sys
 import tempfile
 from pathlib import Path
 import xarray as xr
+
+# Allow running as `python static/make_sfs_climo_from_reforecast.py` from
+# the project root — add project root to sys.path so that `utils` is found.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.nmme_io import decode_S_cftime
 
 
 def parse_args() -> argparse.Namespace:
