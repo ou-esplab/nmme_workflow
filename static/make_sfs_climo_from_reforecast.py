@@ -110,6 +110,15 @@ def main() -> int:
         except Exception:
             ds_i = xr.open_dataset(f, decode_times=False, chunks={})
             ds_i = decode_S_cftime(ds_i)
+        # Normalize dimension names: standard NMME hindcast files use short
+        # SubX names (S, L, M, X, Y); NOAA-SFS reforecast files already use
+        # human-readable names (init, lead, member, lon, lat).
+        _rename = {}
+        for _old, _new in [("S","init"),("L","lead"),("M","member"),("X","lon"),("Y","lat")]:
+            if _old in ds_i.dims and _new not in ds_i.dims:
+                _rename[_old] = _new
+        if _rename:
+            ds_i = ds_i.rename(_rename)
         if args.verbose:
             if 'init' in ds_i.coords:
                 print(f"    init: {ds_i['init'].values}")
