@@ -24,7 +24,8 @@ Usage: ./scripts/run_nmme_workflow.sh [OPTIONS]
 OPTIONS:
   --init YYYYMM              Forecast init date (required for regular runs)
   --stages STAGE [STAGE...]  Stages to run (default: ingest preprocess products pycpt)
-                             Available: ingest, preprocess, products, pycpt, publish
+                             Static (one-time): climatology, terciles
+                             Main: ingest, preprocess, products, pycpt, publish
   --publish                  Include publish stage
   --publish-dry-run          Publish without SSH/SCP side effects
   --products-dry-run         Products stage without writing output
@@ -33,6 +34,9 @@ OPTIONS:
   --help                     Show this message
 
 EXAMPLES (CLI):
+  # One-time static setup (generate climo + tercile threshold files)
+  ./scripts/run_nmme_workflow.sh --init 202602 --stages climatology terciles
+
   # Full pipeline for February 2026 initialization
   ./scripts/run_nmme_workflow.sh --init 202602
 
