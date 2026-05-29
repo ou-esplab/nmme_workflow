@@ -157,6 +157,10 @@ def main():
                         anom_leads = []
                         for i in range(n_leads):
                             m = valid_months[i]
+                            # Skip leads whose init month is not in this model's climo
+                            # (e.g. NOAA-SFS reforecast only covers certain init months)
+                            if m not in clim_da["month"].values:
+                                continue
                             # Select correct month and lead
                             clim_sel = clim_da.sel(month=m, lead=i)
                             anom = da.isel(lead=i) - clim_sel
