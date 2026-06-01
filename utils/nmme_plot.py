@@ -269,12 +269,20 @@ def _plot_variable_for_region(
         p0 = pd.Period(init, freq="M")
         fcstmonth_str = str(p0 + ilead)
 
+        # Compute aspect ratio of the region so flat/wide regions get a taller
+        # figure — prevents panel titles from overlapping the maps below them.
+        lon_span = abs(reg["lons"][1] - reg["lons"][0])
+        lat_span = abs(reg["lats"][1] - reg["lats"][0])
+        aspect = lon_span / max(lat_span, 1)
+        fig_h = 8.5 if aspect <= 2.0 else min(11.0, 8.5 * (aspect / 2.0))
+
         fig, axs = plt.subplots(
             3, 3,
-            figsize=(11, 8.5),
+            figsize=(11, fig_h),
             subplot_kw={"projection": proj},
             constrained_layout=True,
         )
+        fig.set_constrained_layout_pads(hspace=0.12)
         axs_flat = axs.flatten()
 
         for i, ax in enumerate(axs_flat):
