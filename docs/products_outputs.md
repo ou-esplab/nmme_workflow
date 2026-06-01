@@ -14,8 +14,8 @@ probabilistic forecast.
 Products are available for:
 
 - **Variables:** Precipitation, 2-meter Temperature
-- **Regions:** Venezuela, Iran, Mexico
-- **Seasons:** MAM, AMJ, MJJ, JJA, ASO, NDJ (overlapping 3-month windows)
+- **Regions:** CONUS, Venezuela, Iran, Mexico
+- **Seasons:** MAM, AMJ, MJJ, JJA, ASO, NDJ (overlapping 3-month windows); Apr-Jul, Apr-Sep, Oct-Jan (multi-month windows)
 - **Climatological baseline:** 1991–2020
 
 ---
