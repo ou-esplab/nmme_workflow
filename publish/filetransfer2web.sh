@@ -3,7 +3,12 @@ set -Eeuo pipefail
 
 cfg_get_regions() {
   # Returns space-separated list of region names from confignmme.yaml regions[].name
-  python3 - "$NMME_CONFIG" <<'PY'
+  local cfg="${NMME_CONFIG:-confignmme.yaml}"
+  # Resolve relative paths against the script's parent directory (project root)
+  if [[ ! "$cfg" = /* ]]; then
+    cfg="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/$cfg"
+  fi
+  python3 - "$cfg" <<'PY'
 import sys, yaml
 try:
     with open(sys.argv[1]) as f:
@@ -167,8 +172,11 @@ for region in "${REGIONS[@]}"; do
     mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${product}/${region}")
   done
 done
-run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
-  "mkdir -p $(printf '"%s" ' "${mkdir_dirs[@]}")"
+mkdir_cmd="mkdir -p"
+for _d in "${mkdir_dirs[@]}"; do
+  mkdir_cmd+=" $(printf '%q' "$_d")"
+done
+run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "$mkdir_cmd"
 
 if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
   # Copy monthly anomaly NetCDF data files
