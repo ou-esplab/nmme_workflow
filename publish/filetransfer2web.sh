@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+cfg_get_regions() {
+  # Returns space-separated region names from confignmme.yaml regions[].name
+  local cfg="${NMME_CONFIG:-confignmme.yaml}"
+  # Resolve relative path against project root (one level up from publish/)
+  if [[ ! "$cfg" = /* ]]; then
+    cfg="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/$cfg"
+  fi
+  python3 - "$cfg" <<'PY'
+import sys, yaml
+try:
+    with open(sys.argv[1]) as f:
+        data = yaml.safe_load(f) or {}
+    print(" ".join(r["name"] for r in data.get("regions", [])))
+except Exception:
+    print("Venezuela Iran Mexico CONUS")
+PY
+}
+
 cfg_get() {
   local key="$1"
   local default="$2"
@@ -99,6 +117,9 @@ PUBLISH_COPY_STATIC_FORCE="$(to_bool01 "$PUBLISH_COPY_STATIC_FORCE")"
 
 FORECAST_ROOT="${NMME_FORECAST_ROOT:-$(cfg_get 'data.output.nmme_forecast' '/data/esplab/shared/model/initialized/nmme/forecast')}"
 
+# Region list from config — single source of truth
+read -ra REGIONS <<< "$(cfg_get_regions)"
+
 if [[ "$PUBLISH_ENABLED" != "1" ]]; then
   echo "[INFO] publish stage disabled; skipping"
   exit 0
@@ -137,36 +158,29 @@ if (( timeout == 0 )); then
   exit 1
 fi
 
-run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
-  "mkdir -p \
-      ${PUBLISH_DEST_DIR}/data/${fcstdate}/monthly \
-      ${PUBLISH_DEST_DIR}/data/${fcstdate}/seasonal \
-      ${PUBLISH_DEST_DIR}/data/${fcstdate}/tercile_probs \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Mexico \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Venezuela \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Iran \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/Mexico \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/CONUS \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/threshold_maps/Venezuela \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/threshold_maps/Iran \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/threshold_maps/Mexico \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/threshold_maps/CONUS \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/most_likely/Venezuela \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/most_likely/Iran \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/most_likely/Mexico \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/most_likely/CONUS \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/cpt_dominant/Venezuela \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/cpt_dominant/Iran \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/cpt_dominant/Mexico \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/cpt_dominant/CONUS \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/seasonal_total_summary/Venezuela \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/seasonal_total_summary/Iran \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/seasonal_total_summary/Mexico \
-      ${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/seasonal_total_summary/CONUS"
+# Build remote directory list and create via xargs (avoids SSH quoting issues)
+_mkdir_dirs=(
+  "${PUBLISH_DEST_DIR}/data/${fcstdate}/monthly"
+  "${PUBLISH_DEST_DIR}/data/${fcstdate}/seasonal"
+  "${PUBLISH_DEST_DIR}/data/${fcstdate}/tercile_probs"
+  "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global"
+  "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/NorthAmerica"
+)
+for _region in "${REGIONS[@]}"; do
+  _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/${_region}")
+  _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_region}")
+  for _product in threshold_maps most_likely cpt_dominant seasonal_total_summary; do
+    _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_product}/${_region}")
+  done
+done
+
+if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
+  echo "[DRY-RUN] ssh mkdir -p for ${#_mkdir_dirs[@]} directories"
+  printf '  %s\n' "${_mkdir_dirs[@]}"
+else
+  printf '%s\n' "${_mkdir_dirs[@]}" | \
+    ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "xargs mkdir -p"
+fi
 
 if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
   # Copy monthly anomaly NetCDF data files
@@ -177,11 +191,11 @@ if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
   # Copy monthly forecast images organized by region
   if [[ -d "${sourceDir}/images/anomalies" ]]; then
       run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Global/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global/" 2>/dev/null || true
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/NorthAmerica/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America/" 2>/dev/null || true
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Venezuela/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela/" 2>/dev/null || true
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Iran/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran/" 2>/dev/null || true
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Mexico/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Mexico/" 2>/dev/null || true
-      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/CONUS/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/CONUS/" 2>/dev/null || true
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/NorthAmerica/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/NorthAmerica/" 2>/dev/null || true
+      for _region in "${REGIONS[@]}"; do
+        run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}/images/anomalies/${_region}/"* \
+          "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/${_region}/" 2>/dev/null || true
+      done
   fi
 fi
 
@@ -196,20 +210,20 @@ if [[ "$PUBLISH_COPY_SEASONAL" == "1" ]]; then
 
   # Copy seasonal tercile probability maps organized by region
   if [[ -d "${sourceDir}/images/tercile_probs" ]]; then
-      for region in Venezuela Iran Mexico CONUS; do
-        if [[ -d "${sourceDir}/images/tercile_probs/${region}" ]]; then
-          run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDir}/images/tercile_probs/${region}/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${region}/"
+      for _region in "${REGIONS[@]}"; do
+        if [[ -d "${sourceDir}/images/tercile_probs/${_region}" ]]; then
+          run_cmd scp -r -i "${ssh_key_expanded}" "${sourceDir}/images/tercile_probs/${_region}/." "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_region}/"
         fi
       done
   fi
 
   # Copy additional seasonal image products (threshold_maps, most_likely, cpt_dominant, seasonal_total_summary)
-  for product in threshold_maps most_likely cpt_dominant seasonal_total_summary; do
-    for region in Venezuela Iran Mexico CONUS; do
-      if [[ -d "${sourceDir}/images/${product}/${region}" ]]; then
+  for _product in threshold_maps most_likely cpt_dominant seasonal_total_summary; do
+    for _region in "${REGIONS[@]}"; do
+      if [[ -d "${sourceDir}/images/${_product}/${_region}" ]]; then
         run_cmd scp -r -i "${ssh_key_expanded}" \
-          "${sourceDir}/images/${product}/${region}/." \
-          "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${product}/${region}/"
+          "${sourceDir}/images/${_product}/${_region}/." \
+          "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_product}/${_region}/"
       fi
     done
   done
