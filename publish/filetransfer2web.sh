@@ -174,13 +174,11 @@ for _region in "${REGIONS[@]}"; do
   done
 done
 
-if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
-  echo "[DRY-RUN] ssh mkdir -p for ${#_mkdir_dirs[@]} directories"
-  printf '  %s\n' "${_mkdir_dirs[@]}"
-else
-  printf '%s\n' "${_mkdir_dirs[@]}" | \
-    ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "xargs mkdir -p"
-fi
+_mkdir_cmd="mkdir -p"
+for _d in "${_mkdir_dirs[@]}"; do
+  _mkdir_cmd+=" $(printf '%q' "$_d")"
+done
+run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "$_mkdir_cmd"
 
 if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
   # Copy monthly anomaly NetCDF data files
