@@ -13,6 +13,7 @@
     <select class="form-control" id="fcstselecttype" onchange="onTypeChange()">
      <option value="monthly">Monthly Anomalies</option>
      <option value="tercile_probs">Seasonal Tercile Probabilities</option>
+     <option value="cpt_dominant">Combined Tercile Probabilities</option>
     </select>
    </div>
    <div class="form-group" style="margin-right:10px">
@@ -141,8 +142,14 @@
       var season = document.getElementById("fcstselectseason").value.trim();
       var s = seasonalVarMap[varReg];
       if (!s) return null;
-      return "images/" + resolvedDate + "/seasonal/" + s.region + "/" +
-             "NMME_" + resolvedDate + "_" + s.region + "_" + season + "_" + s.varName + "_tercile_probs.png";
+      if (type === "tercile_probs") {
+        return "images/" + resolvedDate + "/seasonal/" + s.region + "/" +
+               "NMME_" + resolvedDate + "_" + s.region + "_" + season + "_" + s.varName + "_tercile_probs.png";
+      } else {
+        // cpt_dominant
+        return "images/" + resolvedDate + "/seasonal/cpt_dominant/" + s.region + "/" +
+               "NMME_" + resolvedDate + "_" + s.region + "_" + season + "_" + s.varName + "_cpt_dominant.png";
+      }
     }
   }
 
