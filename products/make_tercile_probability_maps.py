@@ -334,12 +334,21 @@ def compute_region_probabilities(
     lon0 = (float(lon_bounds[0]) + 360.0) % 360.0
     lon1 = (float(lon_bounds[1]) + 360.0) % 360.0
 
-    target_lat = xr.DataArray(np.arange(lat0, lat1 + 1e-6, 1.0), dims=("lat",), name="lat")
-    if lon0 <= lon1:
-        target_lon_vals = np.arange(lon0, lon1 + 1e-6, 1.0)
+    # Round bounds to nearest integer degree so the target grid aligns with
+    # model grids (which use integer lat/lon coordinates).  Non-integer bounds
+    # (e.g. C.Asia lat=28.39) produce a target like [28.39, 29.39, ...] that
+    # reindex cannot match to the model's [28, 29, ...] grid, yielding all NaN.
+    lat0_r = round(lat0)
+    lat1_r = round(lat1)
+    lon0_r = round(lon0)
+    lon1_r = round(lon1)
+
+    target_lat = xr.DataArray(np.arange(lat0_r, lat1_r + 1e-6, 1.0), dims=("lat",), name="lat")
+    if lon0_r <= lon1_r:
+        target_lon_vals = np.arange(lon0_r, lon1_r + 1e-6, 1.0)
     else:
-        left = np.arange(lon0, 360.0, 1.0)
-        right = np.arange(0.0, lon1 + 1e-6, 1.0)
+        left = np.arange(lon0_r, 360.0, 1.0)
+        right = np.arange(0.0, lon1_r + 1e-6, 1.0)
         target_lon_vals = np.concatenate([left, right])
     target_lon = xr.DataArray(target_lon_vals, dims=("lon",), name="lon")
 
