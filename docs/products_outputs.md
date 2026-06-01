@@ -146,15 +146,35 @@ initialization month, so available seasons shift slightly each month.
 
 ---
 
-## Data Files
+## Output Files
+
+### NetCDF Data Files
 
 NetCDF files are provided for users who want to work with the forecast data directly.
+All files are located under `forecast/{YYYYMM}/data/`.
 
-| File type | Contents |
-|-----------|---------|
-| Monthly anomaly | Multi-model ensemble mean anomaly for each forecast month and model |
-| Seasonal anomaly | 3-month rolling mean of the monthly anomalies |
-| Tercile probabilities | BN, NN, AN probability fields (%) on a 1-degree regional grid |
+| File | Contents |
+|------|---------|
+| `NMME_fcst_{YYYYMM}.anom.monthly.{var}.emean.nc` | Per-model and MME ensemble-mean monthly anomaly (leads 0–8) |
+| `NMME_fcst_{YYYYMM}.anom.seas.{var}.emean.nc` | Per-model and MME ensemble-mean seasonal (3-month mean) anomaly |
+| `NMME_{YYYYMM}_{Region}_{Season}_{var}_tercile_probs.nc` | BN, NN, AN probability fields (%) on a 1° regional grid |
+
+Where `{var}` is one of `prec_sfc`, `tref_2m`, `sst_sfc`, `h200_200`.
+
+### Image Files
+
+All images are located under `forecast/{YYYYMM}/images/`.
+
+| Product | Path | Filename pattern |
+|---------|------|-----------------|
+| Monthly anomaly | `anomalies/{Region}/` | `{Var}{Region}Month{N}.png` |
+| Tercile probabilities | `tercile_probs/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_tercile_probs.png` |
+| Combined tercile (CPT-style) | `cpt_dominant/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_cpt_dominant.png` |
+| Most likely category | `most_likely/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_most_likely.png` |
+| Threshold maps | `threshold_maps/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_thresholds.png` |
+| Seasonal total summary | `seasonal_total_summary/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_seasonal_total_summary.png` |
+
+Where `{var}` is `prec` or `tref`, `{N}` is the lead month number (0–8), and `{Var}` is `Precip`, `2mTemp`, or `SST`.
 
 ---
 
