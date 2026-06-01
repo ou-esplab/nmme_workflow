@@ -264,6 +264,30 @@ if [[ -f "$_local_html" ]]; then
   fi
 fi
 
+# Always sync forecasts.html date list to match date directories that actually
+# exist in images/ on the remote server.
+_html_in="${script_dir}/forecasts.${fcstdate}.in.html"
+_html_out="${script_dir}/forecasts.${fcstdate}.out.html"
+if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
+  echo "[DRY-RUN] would sync forecasts.html date list from ${PUBLISH_DEST_DIR}/images/"
+else
+  _remote_dates=$(ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
+    "ls '${PUBLISH_DEST_DIR}/images/' 2>/dev/null | grep -E '^[0-9]{6}$' | tr '\n' ' '" || true)
+  if [[ -n "$_remote_dates" ]] && \
+     scp -q -i "${ssh_key_expanded}" \
+       "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/forecasts.html" "$_html_in" 2>/dev/null; then
+    python3 "${script_dir}/updatehtmldates.py" \
+      --date "${fcstdate}" \
+      --dates "${_remote_dates}" \
+      --input "$_html_in" \
+      --output "$_html_out"
+    scp -q -i "${ssh_key_expanded}" "$_html_out" \
+      "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/forecasts.html"
+    echo "[INFO] Synced forecasts.html date list: ${_remote_dates}"
+  fi
+  rm -f "$_html_in" "$_html_out"
+fi
+
 if [[ "$PUBLISH_UPDATE_HTML" == "1" ]]; then
   local_in="${script_dir}/forecasts.${fcstdate}.html"
   local_out="${script_dir}/output.${fcstdate}.html"
