@@ -14,7 +14,7 @@ probabilistic forecast.
 Products are available for:
 
 - **Variables:** Precipitation, 2-meter Temperature
-- **Regions:** CONUS, Venezuela, Iran, Mexico
+- **Regions:** CONUS, Venezuela, Iran, Mexico, C.Asia
 - **Seasons:** MAM, AMJ, MJJ, JJA, ASO, NDJ (overlapping 3-month windows); Apr-Jul, Apr-Sep, Oct-Jan (multi-month windows)
 - **Climatological baseline:** 1991–2020
 
@@ -123,6 +123,7 @@ means in physical units for each region and season.
 | Venezuela | Northern Venezuela and surrounding area |
 | Iran | Iran and neighboring countries |
 | Mexico | Mexico and the southwestern United States |
+| C.Asia | Central Asia (28°N–56°N, 46°E–88°E) |
 
 ---
 
@@ -204,8 +205,8 @@ all models gives the final BN/NN/AN probabilities.
 members of hindcast data is expensive. Doing it once and storing the results means
 each new forecast takes seconds rather than hours.
 
-**Available for:** Precipitation, 2-meter temperature, and SST, for seasons
-MAM, AMJ, MJJ, JJA, ASO, and NDJ.
+**Available for:** Precipitation, 2-meter temperature, and SST, for all seasons
+listed in the Seasons table above.
 
 ---
 
