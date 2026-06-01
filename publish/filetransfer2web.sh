@@ -251,6 +251,19 @@ else
   echo "[WARN] docs/products_outputs.md not found; skipping docs publish"
 fi
 
+# One-time: copy the HTML template to the destination if it doesn't exist yet.
+# This allows a new dest_dir to work immediately without a manual copy.
+_remote_html="${PUBLISH_DEST_DIR}/forecasts.html"
+_local_html="${script_dir}/forecasts.remote.html"
+if [[ -f "$_local_html" ]]; then
+  if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
+    echo "[DRY-RUN] would copy forecasts.remote.html -> ${_remote_html} if not present"
+  elif ! ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "test -f '${_remote_html}'"; then
+    run_cmd scp -i "${ssh_key_expanded}" "$_local_html" "${PUBLISH_DEST_HOST}:${_remote_html}"
+    echo "[INFO] Initialized ${_remote_html}"
+  fi
+fi
+
 if [[ "$PUBLISH_UPDATE_HTML" == "1" ]]; then
   local_in="${script_dir}/forecasts.${fcstdate}.html"
   local_out="${script_dir}/output.${fcstdate}.html"
