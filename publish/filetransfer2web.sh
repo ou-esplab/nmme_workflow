@@ -164,9 +164,11 @@ mkdir_dirs=(
   "${PUBLISH_DEST_DIR}/data/${fcstdate}/tercile_probs"
   "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global"
   "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North America"
+  "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran"
+  "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela"
 )
+# Seasonal tercile products are produced for all config regions
 for region in "${REGIONS[@]}"; do
-  mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/${region}")
   mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${region}")
   for product in threshold_maps most_likely cpt_dominant seasonal_total_summary; do
     mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${product}/${region}")
@@ -188,9 +190,8 @@ if [[ "$PUBLISH_COPY_MONTHLY" == "1" ]]; then
   if [[ -d "${sourceDir}/images/anomalies" ]]; then
       run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Global/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global/" 2>/dev/null || true
       run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/NorthAmerica/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/North\ America/" 2>/dev/null || true
-      for region in "${REGIONS[@]}"; do
-        run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}/images/anomalies/${region}/"* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/${region}/" 2>/dev/null || true
-      done
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Iran/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Iran/" 2>/dev/null || true
+      run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}"/images/anomalies/Venezuela/* "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Venezuela/" 2>/dev/null || true
   fi
 fi
 
