@@ -57,6 +57,10 @@ def main():
     for model_name in cfg["models"]:
         for var in ["prec", "tref", "sst"]:
             for season, leads in SEASON_LEADS.items():
+                out_path = outdir / f"{model_name}.{var}.{season}.terciles.1991-2020.nc"
+                if out_path.exists():
+                    print(f"[SKIP] Already exists: {out_path}")
+                    continue
                 # Set up paths and file patterns
                 if model_name == "NOAA-SFS":
                     root = sfs_hindcast_root
@@ -197,7 +201,6 @@ def main():
                 t33 = all_samples.quantile(0.33, dim="sample").drop_vars("quantile", errors="ignore")
                 t66 = all_samples.quantile(0.66, dim="sample").drop_vars("quantile", errors="ignore")
                 ds_out = xr.Dataset({"t33": t33, "t66": t66})
-                out_path = outdir / f"{model_name}.{var}.{season}.terciles.1991-2020.nc"
                 ds_out.to_netcdf(out_path)
                 print(f"[INFO] Saved: {out_path}")
 
