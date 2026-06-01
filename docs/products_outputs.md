@@ -188,6 +188,11 @@ datasets are computed once and reused for every forecast.
 
 ### Climatology
 
+**Filename:** `{Model}.{var}_{lev}.clim.1991-2020.nc`
+- Example: `CanESM5.prec_sfc.clim.1991-2020.nc`
+- Location: `climatology/monthly/1991-2020/`
+- Contents: monthly climatological mean (dims: month × lead × lat × lon)
+
 **What it is:** The average model output for each calendar month and forecast lead,
 computed from 30 years of hindcast runs (1991–2020). This is the baseline that defines
 "normal" conditions.
@@ -207,6 +212,11 @@ height for most models; the 1991–2020 period is used as the reference for all 
 ---
 
 ### Tercile Thresholds
+
+**Filename:** `{Model}.{var}.{Season}.terciles.1991-2020.nc`
+- Example: `CanESM5.prec.MAM.terciles.1991-2020.nc`
+- Location: `terciles/1991-2020/`
+- Contents: T33 and T66 threshold fields (dims: lat × lon)
 
 **What they are:** For each model, variable, season, and grid point, the values that
 divide the 1991–2020 hindcast distribution into three equal thirds:
