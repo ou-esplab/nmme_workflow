@@ -75,7 +75,7 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
                       ilead: int, title: str, outpath: Path,
                       land_mask_path: str = "",
                       wind_threshold_ms: float | None = None,
-                      stride: int = 4) -> None:
+                      stride: int = 6) -> None:
     """
     Plot u/v as quiver arrows on a global Robinson projection, ocean only.
     If wind_threshold_ms is set, arrows at or above the threshold are shown in red.
