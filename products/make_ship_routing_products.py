@@ -12,7 +12,6 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 import xarray as xr
 import cartopy.crs as ccrs
@@ -76,7 +75,7 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
                       ilead: int, title: str, outpath: Path,
                       land_mask_path: str = "",
                       wind_threshold_ms: float | None = None,
-                      stride: int = 10) -> None:
+                      stride: int = 4) -> None:
     """
     Plot u/v as quiver arrows on a global Robinson projection, ocean only.
     If wind_threshold_ms is set, arrows at or above the threshold are shown in red.
@@ -136,14 +135,9 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
                 transform=ax.transAxes, fontsize=8,
                 bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
     else:
-        cmap = plt.get_cmap("Blues")
-        norm = mcolors.Normalize(vmin=0, vmax=vmax)
-        q = ax.quiver(lon2d, lat2d, u_ds, v_ds, speed_ds,
-                      cmap=cmap, norm=norm, transform=transform,
-                      scale=scale, width=0.0015, headwidth=3, zorder=3)
-        cb = plt.colorbar(q, ax=ax, orientation="horizontal", pad=0.04, shrink=0.6)
-        units = u_da.attrs.get("units", "m/s")
-        cb.set_label(f"Speed ({units})")
+        ax.quiver(lon2d, lat2d, u_ds, v_ds,
+                  color="steelblue", transform=transform,
+                  scale=scale, width=0.0015, headwidth=3, zorder=3)
 
     ax.set_title(title, fontsize=11)
     fig.tight_layout()
