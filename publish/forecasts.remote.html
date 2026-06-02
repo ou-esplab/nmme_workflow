@@ -52,8 +52,12 @@
     </select>
    </div>
    <div class="form-group" style="margin-right:10px">
-    <label for="fcstselectvar">Variable / Region&nbsp;</label>
-    <select class="form-control" id="fcstselectvar"></select>
+    <label for="fcstselectvar">Variable&nbsp;</label>
+    <select class="form-control" id="fcstselectvar" onchange="onVarChange()"></select>
+   </div>
+   <div class="form-group" style="margin-right:10px">
+    <label for="fcstselectregion">Region&nbsp;</label>
+    <select class="form-control" id="fcstselectregion"></select>
    </div>
    <button type="button" class="btn btn-primary" onclick="myFunction()">Submit</button>
   </form>
@@ -64,55 +68,49 @@
  </div>
 
  <script>
-  var monthlyVarMap = {
-    "2m Temp Global":       { varPrefix: "2mTemp", fileRegion: "Global",       dirRegion: "Global" },
-    "2m Temp NorthAmerica": { varPrefix: "2mTemp", fileRegion: "NorthAmerica", dirRegion: "NorthAmerica" },
-    "2m Temp CONUS":        { varPrefix: "2mTemp", fileRegion: "CONUS",        dirRegion: "CONUS" },
-    "2m Temp Iran":         { varPrefix: "2mTemp", fileRegion: "Iran",         dirRegion: "Iran" },
-    "2m Temp Venezuela":    { varPrefix: "2mTemp", fileRegion: "Venezuela",    dirRegion: "Venezuela" },
-    "2m Temp Mexico":       { varPrefix: "2mTemp", fileRegion: "Mexico",       dirRegion: "Mexico" },
-    "2m Temp C.Asia":       { varPrefix: "2mTemp", fileRegion: "C.Asia",       dirRegion: "C.Asia" },
-    "Precip Global":        { varPrefix: "Precip", fileRegion: "Global",       dirRegion: "Global" },
-    "Precip NorthAmerica":  { varPrefix: "Precip", fileRegion: "NorthAmerica", dirRegion: "NorthAmerica" },
-    "Precip CONUS":         { varPrefix: "Precip", fileRegion: "CONUS",        dirRegion: "CONUS" },
-    "Precip Iran":          { varPrefix: "Precip", fileRegion: "Iran",         dirRegion: "Iran" },
-    "Precip Venezuela":     { varPrefix: "Precip", fileRegion: "Venezuela",    dirRegion: "Venezuela" },
-    "Precip Mexico":        { varPrefix: "Precip", fileRegion: "Mexico",       dirRegion: "Mexico" },
-    "Precip C.Asia":        { varPrefix: "Precip", fileRegion: "C.Asia",       dirRegion: "C.Asia" },
-    "SST Global":           { varPrefix: "SST",    fileRegion: "Global",       dirRegion: "Global" }
+  // Monthly: variable -> { varPrefix, regions[] }
+  var monthlyVars = {
+    "2m Temp": { varPrefix: "2mTemp", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "Precip":  { varPrefix: "Precip", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "SST":     { varPrefix: "SST",    regions: ["Global"] }
   };
 
-  var seasonalVarOptions = [
-    "Precip CONUS", "Precip Mexico", "Precip Iran", "Precip Venezuela", "Precip C.Asia",
-    "Temp CONUS",   "Temp Mexico",   "Temp Iran",   "Temp Venezuela",   "Temp C.Asia"
-  ];
-
-  var seasonalVarMap = {
-    "Precip CONUS":     { varName: "prec", region: "CONUS" },
-    "Precip Mexico":    { varName: "prec", region: "Mexico" },
-    "Precip Iran":      { varName: "prec", region: "Iran" },
-    "Precip Venezuela": { varName: "prec", region: "Venezuela" },
-    "Precip C.Asia":    { varName: "prec", region: "C.Asia" },
-    "Temp CONUS":       { varName: "tref", region: "CONUS" },
-    "Temp Mexico":      { varName: "tref", region: "Mexico" },
-    "Temp Iran":        { varName: "tref", region: "Iran" },
-    "Temp Venezuela":   { varName: "tref", region: "Venezuela" },
-    "Temp C.Asia":      { varName: "tref", region: "C.Asia" }
+  // Seasonal: variable -> varName
+  var seasonalVars = {
+    "Precipitation": "prec",
+    "Temperature":   "tref"
   };
+
+  var seasonalRegions = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
+
+  function populateSelect(id, options) {
+    var sel = document.getElementById(id);
+    sel.innerHTML = "";
+    options.forEach(function(o) {
+      var opt = document.createElement("option");
+      opt.text = o; opt.value = o;
+      sel.add(opt);
+    });
+  }
 
   function onTypeChange() {
     var type = document.getElementById("fcstselecttype").value;
     var isMonthly = (type === "monthly");
     document.getElementById("lead-group").style.display   = isMonthly ? "" : "none";
     document.getElementById("season-group").style.display = isMonthly ? "none" : "";
-    var varSelect = document.getElementById("fcstselectvar");
-    var options = isMonthly ? Object.keys(monthlyVarMap) : seasonalVarOptions;
-    varSelect.innerHTML = "";
-    options.forEach(function(o) {
-      var opt = document.createElement("option");
-      opt.text = o;
-      varSelect.add(opt);
-    });
+    populateSelect("fcstselectvar", isMonthly ? Object.keys(monthlyVars) : Object.keys(seasonalVars));
+    onVarChange();
+  }
+
+  function onVarChange() {
+    var type = document.getElementById("fcstselecttype").value;
+    var varVal = document.getElementById("fcstselectvar").value;
+    if (type === "monthly") {
+      var regions = (monthlyVars[varVal] || monthlyVars["Precip"]).regions;
+      populateSelect("fcstselectregion", regions);
+    } else {
+      populateSelect("fcstselectregion", seasonalRegions);
+    }
   }
 
   function resolveLatestDate() {
@@ -126,29 +124,29 @@
   }
 
   function buildImagePath() {
-    var type        = document.getElementById("fcstselecttype").value;
-    var date        = document.getElementById("fcstselectdate").value.trim();
-    var varReg      = document.getElementById("fcstselectvar").value.trim();
+    var type         = document.getElementById("fcstselecttype").value;
+    var date         = document.getElementById("fcstselectdate").value.trim();
+    var varVal       = document.getElementById("fcstselectvar").value.trim();
+    var region       = document.getElementById("fcstselectregion").value.trim();
     var resolvedDate = (date === "Latest") ? resolveLatestDate() : date;
 
     if (type === "monthly") {
       var lead    = document.getElementById("fcstselectlead").value.trim();
       var leadNum = lead.replace(/[^\d]/g, "");
-      var m = monthlyVarMap[varReg];
-      if (!m) return null;
-      return "images/" + resolvedDate + "/monthly/" + m.dirRegion + "/" +
-             m.varPrefix + m.fileRegion + "Month" + leadNum + ".png";
+      var cfg = monthlyVars[varVal];
+      if (!cfg) return null;
+      return "images/" + resolvedDate + "/monthly/" + region + "/" +
+             cfg.varPrefix + region + "Month" + leadNum + ".png";
     } else {
-      var season = document.getElementById("fcstselectseason").value.trim();
-      var s = seasonalVarMap[varReg];
-      if (!s) return null;
+      var season  = document.getElementById("fcstselectseason").value.trim();
+      var varName = seasonalVars[varVal];
+      if (!varName) return null;
       if (type === "tercile_probs") {
-        return "images/" + resolvedDate + "/seasonal/" + s.region + "/" +
-               "NMME_" + resolvedDate + "_" + s.region + "_" + season + "_" + s.varName + "_tercile_probs.png";
+        return "images/" + resolvedDate + "/seasonal/" + region + "/" +
+               "NMME_" + resolvedDate + "_" + region + "_" + season + "_" + varName + "_tercile_probs.png";
       } else {
-        // cpt_dominant
-        return "images/" + resolvedDate + "/seasonal/cpt_dominant/" + s.region + "/" +
-               "NMME_" + resolvedDate + "_" + s.region + "_" + season + "_" + s.varName + "_cpt_dominant.png";
+        return "images/" + resolvedDate + "/seasonal/cpt_dominant/" + region + "/" +
+               "NMME_" + resolvedDate + "_" + region + "_" + season + "_" + varName + "_cpt_dominant.png";
       }
     }
   }
