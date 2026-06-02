@@ -29,7 +29,7 @@ def main() -> int:
         "--stages",
         nargs="+",
         default=["ingest", "preprocess", "products", "pycpt"],
-        help="Stages to run in order. Optional static: climatology terciles. Main: ingest preprocess products pycpt publish",
+        help="Stages to run in order. Optional static: climatology terciles. Main: ingest preprocess products pycpt publish ship-routing-products",
     )
     p.add_argument(
         "--climatology-root",
@@ -298,6 +298,14 @@ def main() -> int:
                         args.config,
                     ],
                 ]
+
+    # ---------- Ship Routing Products ----------
+    if "ship-routing-products" in args.stages and args.system == "nmme":
+        stage_cmds["ship-routing-products"] = [[
+            "python", "products/make_ship_routing_products.py",
+            "--init", init_str,
+            "--config", args.config,
+        ]]
 
     # ---------- PyCPT ----------
     if "pycpt" in args.stages:

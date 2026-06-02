@@ -26,6 +26,7 @@ OPTIONS:
   --stages STAGE [STAGE...]  Stages to run (default: ingest preprocess products pycpt)
                              Static (one-time): climatology, terciles
                              Main: ingest, preprocess, products, pycpt, publish
+                             Sector: ship-routing-products
   --publish                  Include publish stage
   --publish-dry-run          Publish without SSH/SCP side effects
   --products-dry-run         Products stage without writing output
