@@ -165,6 +165,8 @@ _mkdir_dirs=(
   "${PUBLISH_DEST_DIR}/data/${fcstdate}/tercile_probs"
   "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/Global"
   "${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/NorthAmerica"
+  "${PUBLISH_DEST_DIR}/images/${fcstdate}/ship_routing/winds"
+  "${PUBLISH_DEST_DIR}/images/${fcstdate}/ship_routing/currents"
 )
 for _region in "${REGIONS[@]}"; do
   _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/${_region}")
@@ -225,6 +227,16 @@ if [[ "$PUBLISH_COPY_SEASONAL" == "1" ]]; then
       fi
     done
   done
+fi
+
+# Copy ship routing images (winds and currents)
+if [[ -d "${sourceDir}/images/ship_routing/winds" ]]; then
+  run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}/images/ship_routing/winds/"*.png \
+    "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/ship_routing/winds/" 2>/dev/null || true
+fi
+if [[ -d "${sourceDir}/images/ship_routing/currents" ]]; then
+  run_cmd scp -i "${ssh_key_expanded}" "${sourceDir}/images/ship_routing/currents/"*.png \
+    "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/ship_routing/currents/" 2>/dev/null || true
 fi
 
 # Render products_outputs.md -> HTML and publish to the top of the dest dir.

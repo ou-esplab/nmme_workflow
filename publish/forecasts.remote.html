@@ -78,7 +78,79 @@
   </div><!-- end tab-standard -->
 
   <div class="tab-pane" id="tab-shiprouting">
-   <p class="text-muted" style="margin-top:20px"><em>Ship Routing sector products — coming soon.</em></p>
+   <form id="srform" class="form-inline" style="margin-top:10px">
+    <div class="form-group" style="margin-right:10px">
+     <label for="srselectdate">Init Date&nbsp;</label>
+     <select class="form-control" id="srselectdate">
+      <option>Latest</option>
+      <option>202605</option>
+     </select>
+    </div>
+    <div class="form-group" style="margin-right:10px">
+     <label for="srselectproduct">Product&nbsp;</label>
+     <select class="form-control" id="srselectproduct">
+      <option value="winds">10m Winds</option>
+      <option value="currents">Surface Currents</option>
+     </select>
+    </div>
+    <div class="form-group" style="margin-right:10px">
+     <label for="srselectlead">Lead&nbsp;</label>
+     <select class="form-control" id="srselectlead">
+      <option>Month 0</option>
+      <option>Month 1</option>
+      <option>Month 2</option>
+      <option>Month 3</option>
+      <option>Month 4</option>
+      <option>Month 5</option>
+      <option>Month 6</option>
+      <option>Month 7</option>
+      <option>Month 8</option>
+     </select>
+    </div>
+    <button type="button" class="btn btn-primary" onclick="srFunction()">Submit</button>
+   </form>
+   <div style="margin-top:10px">
+    <img id="srImage" src="" style="max-width:100%;display:block;margin:auto"/>
+   </div>
+   <script>
+    function srResolveLatestDate() {
+      var sel = document.getElementById("srselectdate");
+      var latest = "";
+      for (var i = 0; i < sel.options.length; i++) {
+        var v = sel.options[i].value.trim();
+        if (/^\d{6}$/.test(v) && (latest === "" || v > latest)) latest = v;
+      }
+      return latest;
+    }
+
+    function srFunction() {
+      var date    = document.getElementById("srselectdate").value.trim();
+      var product = document.getElementById("srselectproduct").value;
+      var lead    = document.getElementById("srselectlead").value.trim();
+      var leadNum = lead.replace(/[^\d]/g, "");
+      var resolvedDate = (date === "Latest") ? srResolveLatestDate() : date;
+
+      var filename = product === "winds"
+        ? "10mWindsGlobalMonth" + leadNum + ".png"
+        : "SfcCurrentsGlobalMonth" + leadNum + ".png";
+
+      var path = "images/" + resolvedDate + "/ship_routing/" + product + "/" + filename;
+      var img = document.getElementById("srImage");
+      var tmp = new Image();
+      tmp.onload  = function() { img.src = path; img.alt = ""; };
+      tmp.onerror = function() {
+        img.src = "";
+        img.alt = "Image not available for this selection.";
+        alert("Ship routing image not available for this date/lead combination.");
+      };
+      tmp.src = path;
+    }
+
+    document.getElementById("srselectdate").addEventListener("change", function() {
+      // sync date with main tab for convenience
+      document.getElementById("fcstselectdate").value = this.value;
+    });
+   </script>
   </div>
 
   <div class="tab-pane" id="tab-energy">
