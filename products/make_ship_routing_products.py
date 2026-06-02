@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 import xarray as xr
 import cartopy.crs as ccrs
@@ -20,7 +21,7 @@ import yaml
 import pandas as pd
 
 KT_TO_MS = 0.514444
-WIND_THRESHOLD_MS = 30 * KT_TO_MS  # 30 knots in m/s
+WIND_THRESHOLD_MS = 30 * KT_TO_MS  # 30 knots in m/s, marked on colorbar
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,7 +33,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def _coord(da: xr.DataArray, names: list[str]) -> np.ndarray:
-    """Return the first matching coordinate array from a list of candidate names."""
     for n in names:
         if n in da.coords:
             return da[n].values
@@ -40,7 +40,6 @@ def _coord(da: xr.DataArray, names: list[str]) -> np.ndarray:
 
 
 def load_ensemble_mean(preprocess_root: Path, init_yyyymm: str, var: str) -> xr.DataArray | None:
-    """Load preprocessed NOAA-SFS variable and return ensemble mean (lead, lat, lon)."""
     yyyy, mm = init_yyyymm[:4], init_yyyymm[4:]
     fpath = (preprocess_root / init_yyyymm / "preprocess" / "NOAA-SFS" / "forecast" / var
              / f"{var}_NOAA-SFS_{yyyy}_{mm}.nc")
@@ -50,58 +49,52 @@ def load_ensemble_mean(preprocess_root: Path, init_yyyymm: str, var: str) -> xr.
     da = xr.open_dataset(fpath)[var]
     if "member" in da.dims:
         da = da.mean("member", skipna=True)
-    return da  # dims: (lead, lat/latitude, lon/longitude)
+    return da
 
 
 def _apply_ocean_mask(u: np.ndarray, v: np.ndarray,
                       lat: np.ndarray, lon: np.ndarray,
                       land_mask_path: str) -> tuple[np.ndarray, np.ndarray]:
-    """Set u/v to NaN over land grid points."""
     if not land_mask_path:
         return u, v
-    ds_mask = xr.open_dataset(land_mask_path)
-    lm = ds_mask["land"]
-    # Align mask to data grid
-    lm_on_grid = lm.interp(lat=xr.DataArray(lat, dims="lat"),
-                            lon=xr.DataArray(lon, dims="lon"),
-                            method="nearest").values
-    land = lm_on_grid > 0.5
-    u = np.where(land, np.nan, u)
-    v = np.where(land, np.nan, v)
-    return u, v
+    lm = xr.open_dataset(land_mask_path)["land"]
+    lm_grid = lm.interp(lat=xr.DataArray(lat, dims="lat"),
+                         lon=xr.DataArray(lon, dims="lon"),
+                         method="nearest").values
+    mask = lm_grid > 0.5
+    return np.where(mask, np.nan, u), np.where(mask, np.nan, v)
 
 
 def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
                       ilead: int, title: str, outpath: Path,
                       land_mask_path: str = "",
+                      units: str = "m/s",
+                      cmap: str = "YlOrRd",
                       wind_threshold_ms: float | None = None,
                       stride: int = 6) -> None:
     """
-    Plot u/v as quiver arrows on a global Robinson projection, ocean only.
-    If wind_threshold_ms is set, arrows at or above the threshold are shown in red.
+    Plot u/v as quiver arrows colored by speed magnitude on a global Robinson
+    projection, ocean points only.  A colorbar shows speed with units.
+    If wind_threshold_ms is given, a dashed line marks that level on the colorbar.
     """
     u_full = u_da.isel(lead=ilead).values
     v_full = v_da.isel(lead=ilead).values
     lat = _coord(u_da, ["lat", "latitude"])
     lon = _coord(u_da, ["lon", "longitude"])
 
-    # Apply ocean mask before downsampling
     u_full, v_full = _apply_ocean_mask(u_full, v_full, lat, lon, land_mask_path)
 
-    # Downsample for arrow density
-    u_ds  = u_full[::stride, ::stride]
-    v_ds  = v_full[::stride, ::stride]
+    u_ds = u_full[::stride, ::stride]
+    v_ds = v_full[::stride, ::stride]
     lat_ds = lat[::stride]
     lon_ds = lon[::stride]
     lon2d, lat2d = np.meshgrid(lon_ds, lat_ds)
-
     speed_ds = np.sqrt(u_ds**2 + v_ds**2)
-    speed_full = np.sqrt(u_full**2 + v_full**2)
 
-    # Scale based on 95th percentile of ocean speeds
-    ocean_speeds = speed_full[~np.isnan(speed_full)]
-    vmax = float(np.percentile(ocean_speeds, 95)) if ocean_speeds.size > 0 else 1.0
+    ocean_speeds = speed_ds[~np.isnan(speed_ds)]
+    vmax = float(np.percentile(ocean_speeds, 98)) if ocean_speeds.size > 0 else 1.0
     vmax = max(vmax, 1e-3)
+    norm = mcolors.Normalize(vmin=0, vmax=vmax)
     scale = vmax * 40
 
     fig = plt.figure(figsize=(14, 7))
@@ -112,32 +105,21 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=2)
     ax.add_feature(cfeature.BORDERS,   linewidth=0.3, zorder=2)
 
-    transform = ccrs.PlateCarree()
+    q = ax.quiver(
+        lon2d, lat2d, u_ds, v_ds, speed_ds,
+        cmap=plt.get_cmap(cmap), norm=norm,
+        transform=ccrs.PlateCarree(),
+        scale=scale, width=0.0015, headwidth=3, zorder=3,
+    )
 
-    if wind_threshold_ms is not None:
-        # Below threshold: steel blue; at/above threshold: red
-        below = speed_ds < wind_threshold_ms
-        above = ~below & ~np.isnan(speed_ds)
+    cb = plt.colorbar(q, ax=ax, orientation="horizontal", pad=0.04, shrink=0.6)
+    cb.set_label(f"Speed ({units})", fontsize=10)
 
-        if below.any():
-            ax.quiver(lon2d[below], lat2d[below], u_ds[below], v_ds[below],
-                      color="steelblue", transform=transform,
-                      scale=scale, width=0.0015, headwidth=3, zorder=3,
-                      label=f"< 30 kt")
-        if above.any():
-            ax.quiver(lon2d[above], lat2d[above], u_ds[above], v_ds[above],
-                      color="red", transform=transform,
-                      scale=scale, width=0.002, headwidth=3, zorder=4,
-                      label=f"≥ 30 kt")
-        ax.legend(loc="lower left", fontsize=8, framealpha=0.7)
-        # Speed colorbar not needed for two-colour scheme; add a text note instead
-        ax.text(0.01, 0.01, "Blue < 30 kt  |  Red ≥ 30 kt",
-                transform=ax.transAxes, fontsize=8,
-                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
-    else:
-        ax.quiver(lon2d, lat2d, u_ds, v_ds,
-                  color="steelblue", transform=transform,
-                  scale=scale, width=0.0015, headwidth=3, zorder=3)
+    # Mark the 30-kt threshold on the wind colorbar
+    if wind_threshold_ms is not None and wind_threshold_ms <= vmax:
+        cb.ax.axvline(wind_threshold_ms, color="black", linewidth=1.5, linestyle="--")
+        cb.ax.text(wind_threshold_ms, 1.05, "30 kt", transform=cb.ax.transData,
+                   ha="center", va="bottom", fontsize=8, color="black")
 
     ax.set_title(title, fontsize=11)
     fig.tight_layout()
@@ -159,9 +141,6 @@ def main() -> int:
     land_mask_path  = cfg.get("plotting", {}).get("land_ocean_mask", "")
 
     img_root = forecast_root / init_yyyymm / "images" / "ship_routing"
-    wind_dir = img_root / "winds"
-    curr_dir = img_root / "currents"
-
     p0 = pd.Period(init_yyyymm, freq="M")
 
     # ---- 10m winds ----
@@ -172,14 +151,16 @@ def main() -> int:
         n_leads = min(9, u10m.sizes.get("lead", 0))
         for ilead in range(n_leads):
             month_str = str(p0 + ilead)
-            title = f"NOAA-SFS 10m Winds — {month_str} (Lead {ilead})"
-            outpath = wind_dir / f"10mWindsGlobalMonth{ilead}.png"
+            title = f"NOAA-SFS 10m Wind Speed & Direction — {month_str} (Lead {ilead})"
+            outpath = img_root / "winds" / f"10mWindsGlobalMonth{ilead}.png"
             if args.dry_run:
                 print(f"[DRY-RUN] would write {outpath}")
             else:
                 plot_vector_field(u10m, v10m, ilead, title, outpath,
                                   land_mask_path=land_mask_path,
-                                  wind_threshold_ms=WIND_THRESHOLD_MS)
+                                  units="m/s", cmap="YlOrRd",
+                                  wind_threshold_ms=WIND_THRESHOLD_MS,
+                                  stride=6)
     else:
         print("[WARN] Skipping wind plots: u10m or v10m missing")
 
@@ -191,13 +172,14 @@ def main() -> int:
         n_leads = min(9, ssu.sizes.get("lead", 0))
         for ilead in range(n_leads):
             month_str = str(p0 + ilead)
-            title = f"NOAA-SFS Surface Ocean Currents — {month_str} (Lead {ilead})"
-            outpath = curr_dir / f"SfcCurrentsGlobalMonth{ilead}.png"
+            title = f"NOAA-SFS Surface Current Speed & Direction — {month_str} (Lead {ilead})"
+            outpath = img_root / "currents" / f"SfcCurrentsGlobalMonth{ilead}.png"
             if args.dry_run:
                 print(f"[DRY-RUN] would write {outpath}")
             else:
                 plot_vector_field(ssu, ssv, ilead, title, outpath,
                                   land_mask_path=land_mask_path,
+                                  units="m/s", cmap="Blues",
                                   stride=4)
     else:
         print("[WARN] Skipping current plots: ssu or ssv missing")
