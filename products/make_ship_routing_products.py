@@ -109,14 +109,21 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=2)
     ax.add_feature(cfeature.BORDERS,   linewidth=0.3, zorder=2)
 
-    q = ax.quiver(
-        lon2d, lat2d, u_ds, v_ds, speed_ds,
-        cmap=plt.get_cmap(cmap), norm=norm,
+    # Color each arrow by its speed using the colormap
+    colormap = plt.get_cmap(cmap)
+    arrow_colors = colormap(norm(speed_ds.ravel()))
+
+    ax.quiver(
+        lon2d, lat2d, u_ds, v_ds,
+        color=arrow_colors,
         transform=ccrs.PlateCarree(),
         scale=scale, width=0.0015, headwidth=3, zorder=3,
     )
 
-    cb = plt.colorbar(q, ax=ax, orientation="horizontal", pad=0.04, shrink=0.6)
+    # Colorbar via ScalarMappable (quiver with transform doesn't expose cmap directly)
+    sm = plt.cm.ScalarMappable(cmap=colormap, norm=norm)
+    sm.set_array([])
+    cb = plt.colorbar(sm, ax=ax, orientation="horizontal", pad=0.04, shrink=0.6)
     cb.set_label(f"Speed ({units})", fontsize=10)
 
     # Mark the 30-kt threshold on the wind colorbar
