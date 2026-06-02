@@ -198,7 +198,7 @@ def main() -> int:
             else:
                 plot_vector_field(ssu, ssv, ilead, title, outpath,
                                   land_mask_path=land_mask_path,
-                                  stride=2)
+                                  stride=4)
     else:
         print("[WARN] Skipping current plots: ssu or ssv missing")
 
