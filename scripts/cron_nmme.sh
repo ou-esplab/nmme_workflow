@@ -20,7 +20,7 @@ cd "$ROOT_DIR"
 
 # ---- Configuration ----------------------------------------------------------
 CONFIG="${NMME_CONFIG:-$ROOT_DIR/confignmme.yaml}"
-STAGES="${NMME_STAGES:-ingest preprocess products pycpt publish}"
+STAGES="${NMME_STAGES:-ingest preprocess products publish}"
 CONDA_BASE="${CONDA_BASE:-$HOME/miniconda3}"
 ENV_NAME="${ENV_NAME:-nmme_workflow_env}"
 LOCK_FILE="$ROOT_DIR/.nmme_cron.lock"

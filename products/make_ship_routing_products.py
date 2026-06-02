@@ -88,21 +88,25 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     u_full = u_full * MS_TO_KT
     v_full = v_full * MS_TO_KT
 
-    u_ds = u_full[::stride, ::stride]
-    v_ds = v_full[::stride, ::stride]
-    lat_ds = lat[::stride]
-    lon_ds = lon[::stride]
-    lon2d, lat2d = np.meshgrid(lon_ds, lat_ds)
-    speed_ds = np.sqrt(u_ds**2 + v_ds**2)
+    # Downsample and filter to ocean-only points (no NaN) as 1D arrays.
+    # Passing 1D arrays to Cartopy quiver with a speed C-array is the most
+    # reliable way to get per-arrow coloring to actually render.
+    u_ds   = u_full[::stride, ::stride].ravel()
+    v_ds   = v_full[::stride, ::stride].ravel()
+    lat_ds = np.meshgrid(lon[::stride], lat[::stride])[1].ravel()
+    lon_ds = np.meshgrid(lon[::stride], lat[::stride])[0].ravel()
+    spd_ds = np.sqrt(u_ds**2 + v_ds**2)
 
-    ocean_speeds = speed_ds[~np.isnan(speed_ds)]
-    vmax = float(np.percentile(ocean_speeds, 98)) if ocean_speeds.size > 0 else 1.0
+    valid  = ~(np.isnan(u_ds) | np.isnan(v_ds))
+    u_ds, v_ds   = u_ds[valid],   v_ds[valid]
+    lat_ds, lon_ds = lat_ds[valid], lon_ds[valid]
+    spd_ds = spd_ds[valid]
+
+    vmax = float(np.percentile(spd_ds, 98)) if spd_ds.size > 0 else 1.0
     vmax = max(vmax, 1e-3)
 
     # Build colormap and norm
     if wind_threshold_ms is not None and 0 < wind_threshold_ms < vmax:
-        # Two-segment colormap with a hard break at the threshold:
-        # Blues (calm) below, Reds (danger) above — visually unmistakable.
         n = 128
         blues = plt.cm.Blues(np.linspace(0.25, 0.85, n))
         reds  = plt.cm.Reds( np.linspace(0.35, 1.00, n))
@@ -123,10 +127,10 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=2)
     ax.add_feature(cfeature.BORDERS,   linewidth=0.3, zorder=2)
 
-    arrow_colors = colormap(norm(speed_ds.ravel()))
+    # Pass speed as C so Cartopy quiver uses cmap/norm directly
     ax.quiver(
-        lon2d, lat2d, u_ds, v_ds,
-        color=arrow_colors,
+        lon_ds, lat_ds, u_ds, v_ds, spd_ds,
+        cmap=colormap, norm=norm,
         transform=ccrs.PlateCarree(),
         scale=scale, width=0.0015, headwidth=3, zorder=3,
     )
@@ -137,9 +141,8 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     cb.set_label(f"Speed ({units})", fontsize=10)
 
     if wind_threshold_ms is not None and wind_threshold_ms <= vmax:
-        cb.ax.axvline(norm(wind_threshold_ms) * cb.ax.get_xlim()[1],
-                      color="black", linewidth=1.5, linestyle="--")
-        cb.ax.text(0.5, -0.6, f"Blue < {wind_threshold_ms:.0f} kt  |  Red ≥ {wind_threshold_ms:.0f} kt",
+        cb.ax.text(0.5, -0.55,
+                   f"Blue < {wind_threshold_ms:.0f} kt  |  Red ≥ {wind_threshold_ms:.0f} kt",
                    transform=cb.ax.transAxes, ha="center", va="top",
                    fontsize=8, color="black")
 
