@@ -143,12 +143,12 @@ def main() -> int:
     else:
         print("[WARN] Skipping wind plots: u10m or v10m missing")
 
-    # ---- Surface ocean currents ----
-    u0 = load_ensemble_mean(preprocess_root, init_yyyymm, "u0")
-    v0 = load_ensemble_mean(preprocess_root, init_yyyymm, "v0")
+    # ---- Surface ocean currents (SSU/SSV) ----
+    ssu = load_ensemble_mean(preprocess_root, init_yyyymm, "ssu")
+    ssv = load_ensemble_mean(preprocess_root, init_yyyymm, "ssv")
 
-    if u0 is not None and v0 is not None:
-        n_leads = min(9, u0.sizes.get("lead", 0))
+    if ssu is not None and ssv is not None:
+        n_leads = min(9, ssu.sizes.get("lead", 0))
         for ilead in range(n_leads):
             month_str = str(p0 + ilead)
             title = f"NOAA-SFS Surface Ocean Currents — {month_str} (Lead {ilead})"
@@ -156,9 +156,9 @@ def main() -> int:
             if args.dry_run:
                 print(f"[DRY-RUN] would write {outpath}")
             else:
-                plot_vector_field(u0, v0, ilead, title, outpath)
+                plot_vector_field(ssu, ssv, ilead, title, outpath)
     else:
-        print("[WARN] Skipping current plots: u0 or v0 missing")
+        print("[WARN] Skipping current plots: ssu or ssv missing")
 
     return 0
 

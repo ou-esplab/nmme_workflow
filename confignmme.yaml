@@ -135,7 +135,7 @@ pipeline:
   sfs:
     enabled: true
     dry_run: false
-    variables: "prec tref sst u10m v10m u0 v0"
+    variables: "prec tref sst u10m v10m ssu ssv"
     reforecast_enabled: true
     reforecast_dry_run: false
     reforecast_script: ./ingest/download_sfs_reforecast_prec.sh
