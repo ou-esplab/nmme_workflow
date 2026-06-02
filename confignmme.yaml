@@ -169,6 +169,20 @@ pipeline:
 
 
 # ------------------------------------------------------------
+# Arraylake Append
+# ------------------------------------------------------------
+arraylake:
+  enabled: false
+  repo: ou-subc/nmme-forecasts
+  branch: main
+  input_root: /data/esplab/nmme-backup
+  datatype: forecast
+  variables: [prec, tref, sst, h200, h500]
+  skip_models: []
+  model_vars: {}
+
+
+# ------------------------------------------------------------
 # Logging & Retention
 # ------------------------------------------------------------
 logging:

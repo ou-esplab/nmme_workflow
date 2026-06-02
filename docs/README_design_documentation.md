@@ -16,9 +16,11 @@ Raw NMME Data
    ↓
 [03] Forecast Products (ensemble‑mean anomalies)
    ↓
-[04] PyCPT Post‑Processing
+[04] Arraylake Append (optional)
    ↓
-[05] Publish (optional)
+[05] PyCPT Post‑Processing
+   ↓
+[06] Publish (optional)
 ```
 
 Primary entrypoint:
@@ -26,6 +28,7 @@ Primary entrypoint:
 - `python runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM`
 
 - Default stages run: `ingest`, `preprocess`, `products`, `pycpt`.
+- `arraylake` is opt-in and run explicitly via `--stages arraylake`.
 - Publish is optional and run explicitly via `--stages ... publish`.
 
 ---
@@ -79,6 +82,13 @@ All runtime behavior is controlled by `confignmme.yaml`:
 - Seasons
 - Path patterns
 - I/O locations
+
+## Arraylake Stage
+
+- The Arraylake stage is optional and config-driven via `arraylake.enabled`.
+- It appends new NMME forecast start dates into an external Arraylake repo.
+- It reads `ARRAYLAKE_TOKEN` from `arraylake/.env` when not already set in the environment.
+- The stage is opt-in through the unified runner stage list.
 
 No hard‑coded assumptions.
 

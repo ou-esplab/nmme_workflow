@@ -92,9 +92,10 @@ Preferred new command (runner):
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 ```
 
-This runs the full end-to-end pipeline: ingest, products, pycpt.
+This runs the full end-to-end pipeline: ingest, preprocess, products, pycpt.
 Default stages are: ingest, preprocess, products, pycpt.
-To include publish, add it explicitly in --stages.
+To include Arraylake, add it explicitly in `--stages arraylake`.
+To include publish, add it explicitly in `--stages publish`.
 
 ### SFS AWS Forecast Ingest (prec, tref, sst)
 
@@ -172,6 +173,12 @@ Products dry-run (does not write products):
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages products --products-dry-run
 ```
 
+Arraylake dry-run (scans pending updates only):
+
+```bash
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages arraylake --arraylake-dry-run
+```
+
 Publish dry-run (no SSH/SCP side effects):
 
 ```bash
@@ -197,6 +204,7 @@ No forecast application is performed yet.
 ✅ Deterministic CPT training
 ✅ Dynamic hindcast ensemble means
 ✅ Model‑by‑model handling with missing‑model tolerance
+✅ Optional Arraylake append stage
 
 ---
 
@@ -217,6 +225,14 @@ A successful run ends with:
 ```
 
 Any earlier error indicates configuration or data issues.
+
+---
+
+## Arraylake Stage Notes
+
+- Put your token in `arraylake/.env` as `ARRAYLAKE_TOKEN=...` or export it in the shell before running.
+- The stage is disabled by default in `confignmme.yaml`; enable it only when you intend to run Arraylake.
+- The stage mirrors the SubX token-file convention so the file can be copied locally without committing it.
 
 ---
 

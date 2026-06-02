@@ -90,7 +90,18 @@ Expected:
 - runner runs default stages: `ingest`, `preprocess`, `products`, `pycpt`
 - no uncaught runner exception
 
-## 7. Publish Stage Dry-Run (Optional)
+## 7. Arraylake Dry-Run (Optional)
+
+```bash
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages arraylake --arraylake-dry-run
+```
+
+Expected:
+- command exits 0
+- Arraylake log is created under `logs/.../nmme/202601/`
+- no Arraylake write/commit side effects
+
+## 8. Publish Stage Dry-Run (Optional)
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages publish --publish-dry-run
@@ -100,7 +111,7 @@ Expected:
 - command exits 0
 - publish log generated without SSH/SCP side effects
 
-## 8. Log Review
+## 9. Log Review
 
 Check latest stage logs:
 

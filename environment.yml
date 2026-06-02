@@ -316,6 +316,7 @@ dependencies:
   - wheel=0.42.0
   - widgetsnbextension=4.0.10
   - xarray=2024.2.0
+  - icechunk2
   - xcb-util=0.4.0
   - xcb-util-image=0.4.0
   - xcb-util-keysyms=0.4.0

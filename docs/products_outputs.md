@@ -11,6 +11,10 @@ collection of coupled climate models from NOAA, NASA, NCAR, and other centers. C
 multiple models reduces the uncertainty of any single model and provides a more robust
 probabilistic forecast.
 
+The workflow also supports an optional Arraylake append stage that syncs new forecast init
+dates into an external Arraylake repository. This stage is opt-in via the unified runner and
+uses the local `arraylake/.env` token file when present.
+
 Products are available for:
 
 - **Variables:** Precipitation, 2-meter Temperature

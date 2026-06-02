@@ -4,6 +4,8 @@ __pycache__/
 *.pyd
 *.egg-info/
 .env
+.arraylake/.env
+arraylake/.env
 .venv
 *.log
 *.tmp

@@ -25,9 +25,8 @@ python -c "import cptcore, cptio; print('ok')"
 python3 runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM
 ```
 
-- Stages: `ingest`, `products`, `pycpt` (default runs all).
-- Stages: `ingest`, `preprocess`, `products`, `pycpt`, `publish`.
 - Default run executes: `ingest`, `preprocess`, `products`, `pycpt`.
+- `arraylake` is opt-in and must be requested explicitly with `--stages arraylake`.
 - `publish` is optional and must be requested explicitly with `--stages ... publish`.
 - Place your real `confignmme.yaml` here if the placeholder was created.
 

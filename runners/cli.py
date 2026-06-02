@@ -64,6 +64,11 @@ def main() -> int:
         help="Run products stage without writing plots or NetCDF output",
     )
     p.add_argument(
+        "--arraylake-dry-run",
+        action="store_true",
+        help="Run arraylake stage in scan-only mode without writing to Arraylake",
+    )
+    p.add_argument(
         "--publish-dry-run",
         action="store_true",
         help="Run publish stage without SSH/SCP side effects",
@@ -298,6 +303,26 @@ def main() -> int:
                         args.config,
                     ],
                 ]
+
+    # ---------- Arraylake ----------
+    if "arraylake" in args.stages and args.system == "nmme":
+        import yaml as _yaml
+
+        with open(args.config, "r", encoding="utf-8") as _f:
+            _cfg = _yaml.safe_load(_f) or {}
+
+        _arraylake_cfg = _cfg.get("arraylake") or {}
+        if not _arraylake_cfg.get("enabled", False):
+            print("[SKIP] Arraylake stage disabled in config; skipping")
+        else:
+            cfg_q = shlex.quote(args.config)
+            init_q = shlex.quote(init_str)
+            env_prefix = "ARRAYLAKE_DRY_RUN=1 " if args.arraylake_dry_run else ""
+            stage_cmds["arraylake"] = [[
+                "bash",
+                "-lc",
+                f"{env_prefix}bash arraylake/run_arraylake_rt.sh {init_q} {cfg_q}",
+            ]]
 
     # ---------- Ship Routing Products ----------
     if "ship-routing-products" in args.stages and args.system == "nmme":
