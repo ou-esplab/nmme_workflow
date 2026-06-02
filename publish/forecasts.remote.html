@@ -7,7 +7,17 @@
 <body>
 
  <div class="container-fluid" style="margin-top:10px">
-  <form id="fcstform" class="form-inline">
+  <ul class="nav nav-tabs" id="sectorTabs">
+   <li class="active"><a href="#tab-standard"    data-toggle="tab">Standard</a></li>
+   <li>              <a href="#tab-shiprouting"  data-toggle="tab">Ship Routing</a></li>
+   <li>              <a href="#tab-energy"       data-toggle="tab">Energy</a></li>
+   <li>              <a href="#tab-agriculture"  data-toggle="tab">Agriculture</a></li>
+  </ul>
+
+  <div class="tab-content" style="margin-top:10px">
+
+   <div class="tab-pane active" id="tab-standard">
+    <form id="fcstform" class="form-inline">
    <div class="form-group" style="margin-right:10px">
     <label for="fcstselecttype">Forecast Type&nbsp;</label>
     <select class="form-control" id="fcstselecttype" onchange="onTypeChange()">
@@ -61,11 +71,25 @@
    </div>
    <button type="button" class="btn btn-primary" onclick="myFunction()">Submit</button>
   </form>
- </div>
+  <div style="margin-top:10px">
+   <img id="fcstImage" src="" style="max-width:100%;display:block;margin:auto"/>
+  </div>
+  </div><!-- end tab-standard -->
 
- <div class="container-fluid" style="margin-top:10px">
-  <img id="fcstImage" src="" style="max-width:100%;display:block;margin:auto"/>
- </div>
+  <div class="tab-pane" id="tab-shiprouting">
+   <p class="text-muted" style="margin-top:20px"><em>Ship Routing sector products — coming soon.</em></p>
+  </div>
+
+  <div class="tab-pane" id="tab-energy">
+   <p class="text-muted" style="margin-top:20px"><em>Energy sector products — coming soon.</em></p>
+  </div>
+
+  <div class="tab-pane" id="tab-agriculture">
+   <p class="text-muted" style="margin-top:20px"><em>Agriculture sector products — coming soon.</em></p>
+  </div>
+
+  </div><!-- end tab-content -->
+ </div><!-- end container-fluid -->
 
  <script>
   // Monthly: variable -> { varPrefix, regions[] }
