@@ -20,8 +20,8 @@ import cartopy.feature as cfeature
 import yaml
 import pandas as pd
 
-KT_TO_MS = 0.514444
-WIND_THRESHOLD_MS = 30 * KT_TO_MS  # 30 knots in m/s, marked on colorbar
+MS_TO_KT = 1.0 / 0.514444          # conversion factor m/s -> knots
+WIND_THRESHOLD_KT = 30.0            # marked on wind colorbar
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,6 +84,10 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
 
     u_full, v_full = _apply_ocean_mask(u_full, v_full, lat, lon, land_mask_path)
 
+    # Convert m/s -> knots for plotting and colorbar
+    u_full = u_full * MS_TO_KT
+    v_full = v_full * MS_TO_KT
+
     u_ds = u_full[::stride, ::stride]
     v_ds = v_full[::stride, ::stride]
     lat_ds = lat[::stride]
@@ -118,7 +122,8 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     # Mark the 30-kt threshold on the wind colorbar
     if wind_threshold_ms is not None and wind_threshold_ms <= vmax:
         cb.ax.axvline(wind_threshold_ms, color="black", linewidth=1.5, linestyle="--")
-        cb.ax.text(wind_threshold_ms, 1.05, "30 kt", transform=cb.ax.transData,
+        cb.ax.text(wind_threshold_ms, 1.05, f"{wind_threshold_ms:.0f} kt",
+                   transform=cb.ax.transData,
                    ha="center", va="bottom", fontsize=8, color="black")
 
     ax.set_title(title, fontsize=11)
@@ -158,8 +163,8 @@ def main() -> int:
             else:
                 plot_vector_field(u10m, v10m, ilead, title, outpath,
                                   land_mask_path=land_mask_path,
-                                  units="m/s", cmap="YlOrRd",
-                                  wind_threshold_ms=WIND_THRESHOLD_MS,
+                                  units="kt", cmap="YlOrRd",
+                                  wind_threshold_ms=WIND_THRESHOLD_KT,
                                   stride=6)
     else:
         print("[WARN] Skipping wind plots: u10m or v10m missing")
@@ -179,7 +184,7 @@ def main() -> int:
             else:
                 plot_vector_field(ssu, ssv, ilead, title, outpath,
                                   land_mask_path=land_mask_path,
-                                  units="m/s", cmap="Blues",
+                                  units="kt", cmap="Blues",
                                   stride=4)
     else:
         print("[WARN] Skipping current plots: ssu or ssv missing")
