@@ -98,7 +98,21 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     ocean_speeds = speed_ds[~np.isnan(speed_ds)]
     vmax = float(np.percentile(ocean_speeds, 98)) if ocean_speeds.size > 0 else 1.0
     vmax = max(vmax, 1e-3)
-    norm = mcolors.Normalize(vmin=0, vmax=vmax)
+
+    # Build colormap and norm
+    if wind_threshold_ms is not None and 0 < wind_threshold_ms < vmax:
+        # Two-segment colormap with a hard break at the threshold:
+        # Blues (calm) below, Reds (danger) above — visually unmistakable.
+        n = 128
+        blues = plt.cm.Blues(np.linspace(0.25, 0.85, n))
+        reds  = plt.cm.Reds( np.linspace(0.35, 1.00, n))
+        colormap = mcolors.LinearSegmentedColormap.from_list(
+            "wind_split", np.vstack([blues, reds]))
+        norm = mcolors.TwoSlopeNorm(vmin=0, vcenter=wind_threshold_ms, vmax=vmax)
+    else:
+        colormap = plt.get_cmap(cmap)
+        norm = mcolors.Normalize(vmin=0, vmax=vmax)
+
     scale = vmax * 40
 
     fig = plt.figure(figsize=(14, 7))
@@ -109,10 +123,7 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=2)
     ax.add_feature(cfeature.BORDERS,   linewidth=0.3, zorder=2)
 
-    # Color each arrow by its speed using the colormap
-    colormap = plt.get_cmap(cmap)
     arrow_colors = colormap(norm(speed_ds.ravel()))
-
     ax.quiver(
         lon2d, lat2d, u_ds, v_ds,
         color=arrow_colors,
@@ -120,18 +131,17 @@ def plot_vector_field(u_da: xr.DataArray, v_da: xr.DataArray,
         scale=scale, width=0.0015, headwidth=3, zorder=3,
     )
 
-    # Colorbar via ScalarMappable (quiver with transform doesn't expose cmap directly)
     sm = plt.cm.ScalarMappable(cmap=colormap, norm=norm)
     sm.set_array([])
     cb = plt.colorbar(sm, ax=ax, orientation="horizontal", pad=0.04, shrink=0.6)
     cb.set_label(f"Speed ({units})", fontsize=10)
 
-    # Mark the 30-kt threshold on the wind colorbar
     if wind_threshold_ms is not None and wind_threshold_ms <= vmax:
-        cb.ax.axvline(wind_threshold_ms, color="black", linewidth=1.5, linestyle="--")
-        cb.ax.text(wind_threshold_ms, 1.05, f"{wind_threshold_ms:.0f} kt",
-                   transform=cb.ax.transData,
-                   ha="center", va="bottom", fontsize=8, color="black")
+        cb.ax.axvline(norm(wind_threshold_ms) * cb.ax.get_xlim()[1],
+                      color="black", linewidth=1.5, linestyle="--")
+        cb.ax.text(0.5, -0.6, f"Blue < {wind_threshold_ms:.0f} kt  |  Red ≥ {wind_threshold_ms:.0f} kt",
+                   transform=cb.ax.transAxes, ha="center", va="top",
+                   fontsize=8, color="black")
 
     ax.set_title(title, fontsize=11)
     fig.tight_layout()
