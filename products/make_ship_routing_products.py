@@ -197,7 +197,8 @@ def main() -> int:
                 print(f"[DRY-RUN] would write {outpath}")
             else:
                 plot_vector_field(ssu, ssv, ilead, title, outpath,
-                                  land_mask_path=land_mask_path)
+                                  land_mask_path=land_mask_path,
+                                  stride=2)
     else:
         print("[WARN] Skipping current plots: ssu or ssv missing")
 
