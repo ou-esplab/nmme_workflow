@@ -29,7 +29,7 @@ def main() -> int:
         "--stages",
         nargs="+",
         default=["ingest", "preprocess", "products", "pycpt"],
-        help="Stages to run in order. Optional static: climatology terciles. Main: ingest preprocess products pycpt publish ship-routing-products",
+        help="Stages to run in order. Optional static: climatology terciles skill. Main: ingest preprocess products pycpt publish ship-routing-products",
     )
     p.add_argument(
         "--climatology-root",
@@ -233,6 +233,29 @@ def main() -> int:
             "--outdir", "/data/esplab/shared/model/initialized/nmme/terciles/1991-2020",
         ]
         stage_cmds["terciles"] = cmd
+
+    # ---------- Skill RPSS (optional static stage) ----------
+    if "skill" in args.stages and args.system == "nmme":
+        _skill_outdir = "/data/esplab/shared/model/initialized/nmme/skill/1991-2020"
+        _skill_hroot  = "/data/esplab/nmme-backup"
+        _skill_croot  = "/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020"
+        _obs_precip   = "/data/esplab/shared/obs/gridded/atm/precip/monthly/CHIRPSv2/chirps-v2.0.monthly.nc"
+        _obs_tref     = "/data/esplab/shared/obs/gridded/atm/temperature/monthly/air.mon.mean.nc"
+        skill_cmds = []
+        for _var, _obs_flag, _obs_path in [
+            ("prec", "--obs-precip", _obs_precip),
+            ("tref", "--obs-tref",  _obs_tref),
+        ]:
+            skill_cmds.append([
+                "python", "static/skill/compute_rpss.py",
+                "--config",       args.config,
+                "--var",          _var,
+                "--hindcast-root", _skill_hroot,
+                "--clim-root",    _skill_croot,
+                _obs_flag,        _obs_path,
+                "--outdir",       _skill_outdir,
+            ])
+        stage_cmds["skill"] = skill_cmds
 
     # ---------- Ingest ----------
     if "ingest" in args.stages:
