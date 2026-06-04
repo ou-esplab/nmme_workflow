@@ -278,7 +278,68 @@ def _classify_obs(
 
 
 # ---------------------------------------------------------------------------
-# Per-model RPSS computation
+# Per-(init_month, lead) RPSS helpers
+# ---------------------------------------------------------------------------
+
+def _rpss_one_cell(
+    anoms: xr.DataArray,
+    obs_da: xr.DataArray,
+    init_month: int,
+    lead: int,
+    start_year: int,
+    end_year: int,
+    ref_lat: np.ndarray,
+    ref_lon: np.ndarray,
+    obs_thresh_cache: dict,
+) -> xr.DataArray | None:
+    """
+    Compute RPSS(lat, lon) for one (init_month, lead) cell.
+    Returns None if insufficient data.
+    """
+    valid_month    = ((init_month - 1 + lead) % 12) + 1
+    valid_yr_off   = (init_month - 1 + lead) // 12
+
+    p_bn, p_nn, _ = compute_forecast_probs(anoms)
+    fcst_years     = anoms["year"].values.tolist()
+
+    obs_start = start_year + valid_yr_off
+    obs_end   = end_year   + valid_yr_off
+    obs_month, obs_valid_years = obs_single_month_means(
+        obs_da, valid_month, obs_start, obs_end,
+    )
+    if obs_month is None:
+        return None
+
+    obs_init_years = [y - valid_yr_off for y in obs_valid_years]
+    obs_by_init    = obs_month.assign_coords(year=("year", obs_init_years))
+
+    common = sorted(set(fcst_years) & set(obs_init_years))
+    if len(common) < 5:
+        return None
+
+    p_bn_c = p_bn.sel(year=common)
+    p_nn_c = p_nn.sel(year=common)
+    obs_c  = obs_by_init.sel(year=common)
+    obs_interp = obs_c.interp(lat=ref_lat, lon=ref_lon,
+                               method="linear", kwargs={"fill_value": None})
+
+    if valid_month not in obs_thresh_cache:
+        obs_full, _ = obs_single_month_means(obs_da, valid_month, obs_start, obs_end)
+        if obs_full is None:
+            return None
+        obs_full_i = obs_full.interp(lat=ref_lat, lon=ref_lon,
+                                      method="linear", kwargs={"fill_value": None})
+        t33 = obs_full_i.quantile(1/3, dim="year").drop_vars("quantile", errors="ignore")
+        t66 = obs_full_i.quantile(2/3, dim="year").drop_vars("quantile", errors="ignore")
+        obs_thresh_cache[valid_month] = (t33, t66)
+
+    t33, t66 = obs_thresh_cache[valid_month]
+    obs_cat  = _classify_obs(obs_interp, t33, t66)
+    return compute_rpss(p_bn_c, p_nn_c, obs_cat)
+
+
+# ---------------------------------------------------------------------------
+# Per-model RPSS computation (init_month × lead)
 # ---------------------------------------------------------------------------
 
 def _rpss_for_model(
@@ -293,116 +354,54 @@ def _rpss_for_model(
     end_year: int,
 ) -> xr.DataArray | None:
     """
-    Compute RPSS(lead, lat, lon) for one model by pooling all init months.
+    Compute RPSS(init_month, lead, lat, lon) for one model.
+    Each (init_month, lead) cell is independent; years are the sample dim.
     Returns None if no data was found.
     """
-    rpss_by_lead: dict[int, xr.DataArray] = {}
-    n_samples_by_lead: dict[int, int] = {}
-
-    # Obs tercile threshold cache: valid_month → (t33, t66) on model grid.
-    # Reset per model because different models may have different grids.
-    obs_thresh_cache: dict[int, tuple[xr.DataArray, xr.DataArray]] = {}
+    # Obs threshold cache keyed by valid_month; reset per model (grids differ).
+    obs_thresh_cache: dict[int, tuple] = {}
     ref_lat: np.ndarray | None = None
     ref_lon: np.ndarray | None = None
 
-    for lead in range(1, max_lead + 1):
-        rps_pool:      list[xr.DataArray] = []
-        rps_clim_pool: list[xr.DataArray] = []
-        sample_offset = 0
+    rpss_by_init: dict[int, xr.DataArray] = {}
 
-        for init_month in range(1, 13):
-            valid_month      = ((init_month - 1 + lead) % 12) + 1
-            valid_yr_offset  = (init_month - 1 + lead) // 12   # 0 or 1
+    for init_month in range(1, 13):
+        rpss_by_lead: dict[int, xr.DataArray] = {}
 
-            # --- hindcast ---
-            anoms, fcst_years = load_hindcast_single_lead_anom(
+        for lead in range(1, max_lead + 1):
+            anoms, _ = load_hindcast_single_lead_anom(
                 hindcast_root, clim_root, model, var, lev,
                 init_month, lead, start_year, end_year,
             )
-            if anoms is None or len(fcst_years) < 5:
+            if anoms is None or anoms.sizes["year"] < 5:
                 continue
 
             if ref_lat is None:
                 ref_lat = anoms["lat"].values
                 ref_lon = anoms["lon"].values
 
-            p_bn, p_nn, _ = compute_forecast_probs(anoms)
-
-            # --- observations ---
-            obs_start = start_year + valid_yr_offset
-            obs_end   = end_year   + valid_yr_offset
-            obs_month, obs_valid_years = obs_single_month_means(
-                obs_da, valid_month, obs_start, obs_end,
+            rpss_cell = _rpss_one_cell(
+                anoms, obs_da, init_month, lead,
+                start_year, end_year,
+                ref_lat, ref_lon, obs_thresh_cache,
             )
-            if obs_month is None:
-                continue
+            if rpss_cell is not None:
+                rpss_by_lead[lead] = rpss_cell
+                print(f"  init={init_month:02d}  lead={lead}  "
+                      f"n_years={anoms.sizes['year']}")
 
-            # Re-label obs from valid_year to init_year for alignment
-            obs_init_years = [y - valid_yr_offset for y in obs_valid_years]
-            obs_by_init = obs_month.assign_coords(year=("year", obs_init_years))
+        if rpss_by_lead:
+            leads = sorted(rpss_by_lead.keys())
+            rpss_init = xr.concat([rpss_by_lead[l] for l in leads], dim="lead")
+            rpss_init = rpss_init.assign_coords(lead=("lead", leads))
+            rpss_by_init[init_month] = rpss_init
 
-            common = sorted(set(fcst_years) & set(obs_init_years))
-            if len(common) < 5:
-                continue
-
-            p_bn_c = p_bn.sel(year=common)
-            p_nn_c = p_nn.sel(year=common)
-            obs_c  = obs_by_init.sel(year=common)
-
-            # Regrid obs to model grid
-            obs_interp = obs_c.interp(
-                lat=ref_lat, lon=ref_lon,
-                method="linear", kwargs={"fill_value": None},
-            )
-
-            # Obs thresholds: compute once per valid_month on this model's grid
-            if valid_month not in obs_thresh_cache:
-                obs_full, _ = obs_single_month_means(
-                    obs_da, valid_month, obs_start, obs_end,
-                )
-                if obs_full is None:
-                    continue
-                obs_full_i = obs_full.interp(
-                    lat=ref_lat, lon=ref_lon,
-                    method="linear", kwargs={"fill_value": None},
-                )
-                t33 = obs_full_i.quantile(1/3, dim="year").drop_vars("quantile", errors="ignore")
-                t66 = obs_full_i.quantile(2/3, dim="year").drop_vars("quantile", errors="ignore")
-                obs_thresh_cache[valid_month] = (t33, t66)
-
-            t33, t66 = obs_thresh_cache[valid_month]
-            obs_cat = _classify_obs(obs_interp, t33, t66)
-
-            # Per-year RPS, renamed to unique sample indices
-            rps, rps_clim = _rps_per_year(p_bn_c, p_nn_c, obs_cat)
-            n = rps.sizes["year"]
-            idx = np.arange(sample_offset, sample_offset + n)
-            rps_pool.append(
-                rps.assign_coords(year=idx).rename({"year": "sample"})
-            )
-            rps_clim_pool.append(
-                rps_clim.assign_coords(year=idx).rename({"year": "sample"})
-            )
-            sample_offset += n
-
-        if not rps_pool:
-            continue
-
-        all_rps      = xr.concat(rps_pool,      dim="sample")
-        all_rps_clim = xr.concat(rps_clim_pool, dim="sample")
-        rpss_L = (1 - all_rps.mean("sample") / all_rps_clim.mean("sample")).rename("rpss")
-
-        rpss_by_lead[lead]     = rpss_L
-        n_samples_by_lead[lead] = sample_offset
-        print(f"    lead={lead:2d}  n_samples={sample_offset}")
-
-    if not rpss_by_lead:
+    if not rpss_by_init:
         return None
 
-    leads    = sorted(rpss_by_lead.keys())
-    rpss_all = xr.concat([rpss_by_lead[l] for l in leads], dim="lead")
-    rpss_all = rpss_all.assign_coords(lead=("lead", leads))
-    rpss_all.attrs["n_samples"] = str({l: n_samples_by_lead[l] for l in leads})
+    inits    = sorted(rpss_by_init.keys())
+    rpss_all = xr.concat([rpss_by_init[i] for i in inits], dim="init_month")
+    rpss_all = rpss_all.assign_coords(init_month=("init_month", inits))
     return rpss_all
 
 
@@ -488,7 +487,7 @@ def main() -> int:
         print(f"[SAVED] {out_path.name}")
 
     # ----------------------------------------------------------------
-    # MME: pool anomalies across all models, then same lead loop
+    # MME: pool members across all models per (init_month, lead)
     # ----------------------------------------------------------------
     print(f"\n{'='*60}")
     print(f"[MODEL] MME  var={var}")
@@ -498,18 +497,14 @@ def main() -> int:
     if out_path_mme.exists() and not args.overwrite:
         print(f"[SKIP] {out_path_mme.name}")
     else:
-        rpss_by_lead_mme:    dict[int, xr.DataArray] = {}
-        n_samples_by_lead_mme: dict[int, int]        = {}
-
         obs_thresh_cache_mme: dict[int, tuple] = {}
         ref_lat = ref_lon = None
+        rpss_by_init_mme: dict[int, xr.DataArray] = {}
 
-        for lead in range(1, args.max_lead + 1):
-            rps_pool:      list[xr.DataArray] = []
-            rps_clim_pool: list[xr.DataArray] = []
-            sample_offset = 0
+        for init_month in range(1, 13):
+            rpss_by_lead_mme: dict[int, xr.DataArray] = {}
 
-            for init_month in range(1, 13):
+            for lead in range(1, args.max_lead + 1):
                 valid_month     = ((init_month - 1 + lead) % 12) + 1
                 valid_yr_offset = (init_month - 1 + lead) // 12
 
@@ -527,7 +522,6 @@ def main() -> int:
                     if ref_lat is None:
                         ref_lat = anoms["lat"].values
                         ref_lon = anoms["lon"].values
-                    # Regrid to reference grid if needed
                     if not np.array_equal(anoms["lat"].values, ref_lat) or \
                        not np.array_equal(anoms["lon"].values, ref_lon):
                         anoms = anoms.interp(lat=ref_lat, lon=ref_lon,
@@ -542,81 +536,33 @@ def main() -> int:
                     continue
 
                 common_years = sorted(common_years_all)
-                # Pool members across models for common years
-                mme_pieces = [a.sel(year=common_years) for a in model_anoms]
-                mme_anoms  = xr.concat(mme_pieces, dim="member")
+                mme_pieces   = [a.sel(year=common_years) for a in model_anoms]
+                mme_anoms    = xr.concat(mme_pieces, dim="member")
 
-                p_bn, p_nn, _ = compute_forecast_probs(mme_anoms)
-
-                # Obs
-                obs_start = args.start_year + valid_yr_offset
-                obs_end   = args.end_year   + valid_yr_offset
-                obs_month, obs_valid_years = obs_single_month_means(
-                    obs_da, valid_month, obs_start, obs_end,
+                rpss_cell = _rpss_one_cell(
+                    mme_anoms, obs_da, init_month, lead,
+                    args.start_year, args.end_year,
+                    ref_lat, ref_lon, obs_thresh_cache_mme,
                 )
-                if obs_month is None:
-                    continue
+                if rpss_cell is not None:
+                    rpss_by_lead_mme[lead] = rpss_cell
+                    print(f"  init={init_month:02d}  lead={lead}  "
+                          f"n_years={len(common_years)}")
 
-                obs_init_years = [y - valid_yr_offset for y in obs_valid_years]
-                obs_by_init    = obs_month.assign_coords(year=("year", obs_init_years))
-                common = sorted(set(common_years) & set(obs_init_years))
-                if len(common) < 5:
-                    continue
+            if rpss_by_lead_mme:
+                leads = sorted(rpss_by_lead_mme.keys())
+                rpss_init = xr.concat([rpss_by_lead_mme[l] for l in leads], dim="lead")
+                rpss_init = rpss_init.assign_coords(lead=("lead", leads))
+                rpss_by_init_mme[init_month] = rpss_init
 
-                p_bn_c = p_bn.sel(year=common)
-                p_nn_c = p_nn.sel(year=common)
-                obs_c  = obs_by_init.sel(year=common)
-                obs_interp = obs_c.interp(lat=ref_lat, lon=ref_lon,
-                                          method="linear",
-                                          kwargs={"fill_value": None})
-
-                if valid_month not in obs_thresh_cache_mme:
-                    obs_full, _ = obs_single_month_means(
-                        obs_da, valid_month, obs_start, obs_end,
-                    )
-                    if obs_full is None:
-                        continue
-                    obs_full_i = obs_full.interp(lat=ref_lat, lon=ref_lon,
-                                                  method="linear",
-                                                  kwargs={"fill_value": None})
-                    t33 = obs_full_i.quantile(1/3, dim="year").drop_vars("quantile", errors="ignore")
-                    t66 = obs_full_i.quantile(2/3, dim="year").drop_vars("quantile", errors="ignore")
-                    obs_thresh_cache_mme[valid_month] = (t33, t66)
-
-                t33, t66 = obs_thresh_cache_mme[valid_month]
-                obs_cat  = _classify_obs(obs_interp, t33, t66)
-
-                rps, rps_clim = _rps_per_year(p_bn_c, p_nn_c, obs_cat)
-                n   = rps.sizes["year"]
-                idx = np.arange(sample_offset, sample_offset + n)
-                rps_pool.append(
-                    rps.assign_coords(year=idx).rename({"year": "sample"})
-                )
-                rps_clim_pool.append(
-                    rps_clim.assign_coords(year=idx).rename({"year": "sample"})
-                )
-                sample_offset += n
-
-            if not rps_pool:
-                continue
-
-            all_rps      = xr.concat(rps_pool,      dim="sample")
-            all_rps_clim = xr.concat(rps_clim_pool, dim="sample")
-            rpss_L = (1 - all_rps.mean("sample") / all_rps_clim.mean("sample")).rename("rpss")
-            rpss_by_lead_mme[lead]      = rpss_L
-            n_samples_by_lead_mme[lead] = sample_offset
-            print(f"    lead={lead:2d}  n_samples={sample_offset}")
-
-        if rpss_by_lead_mme:
-            leads    = sorted(rpss_by_lead_mme.keys())
-            rpss_all = xr.concat([rpss_by_lead_mme[l] for l in leads], dim="lead")
-            rpss_all = rpss_all.assign_coords(lead=("lead", leads))
+        if rpss_by_init_mme:
+            inits    = sorted(rpss_by_init_mme.keys())
+            rpss_all = xr.concat([rpss_by_init_mme[i] for i in inits], dim="init_month")
+            rpss_all = rpss_all.assign_coords(init_month=("init_month", inits))
             rpss_all.attrs.update({
-                "model": "MME",
-                "var": var,
+                "model": "MME", "var": var,
                 "period": f"{args.start_year}-{args.end_year}",
                 "models_included": ",".join(models),
-                "n_samples": str({l: n_samples_by_lead_mme[l] for l in leads}),
                 "long_name": "Ranked Probability Skill Score",
                 "valid_range": "-inf to 1 (positive = skilful)",
             })
