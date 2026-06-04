@@ -2,51 +2,48 @@
 """
 Compute RPSS (Ranked Probability Skill Score) for NMME hindcast tercile forecasts.
 
-For each model, variable, initialization month, and season:
-  1. Load hindcast data (1991-2020), compute seasonal mean anomalies per member/year.
-  2. Derive pooled ensemble tercile thresholds from the full hindcast sample.
-  3. Compute P(BN), P(NN), P(AN) for each year.
-  4. Load observations, compute seasonal means and obs tercile thresholds.
-  5. Compute RPSS = 1 - mean(RPS) / mean(RPS_clim) at each gridpoint.
-  6. Write one NetCDF per (model, var, init_month, season).
+For each model, variable, and lead offset (1..max_lead months ahead):
+  - For every init_month (1..12): load the single-lead hindcast anomaly,
+    load the corresponding observed calendar month, compute per-year RPS.
+  - Pool all (init_month × year) pairs before computing the final RPSS.
+
+Output: one NetCDF per (model, var) with dims (lead, lat, lon).
 
 Observation sources:
-  prec : CHIRPS monthly (covers 50S-50N; RPSS will be NaN outside this range)
-  tref : GHCN-CAMS monthly (land only; RPSS will be NaN over ocean)
+  prec : CHIRPS monthly  — covers 50S–50N land; NaN elsewhere
+  tref : GHCN-CAMS monthly — land only; NaN over ocean
 """
 
 import argparse
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-import yaml
+
+# All-NaN slices are expected at high-latitude / ocean gridpoints outside obs
+# coverage (e.g. beyond CHIRPS ±50°N).  Suppress the per-quantile warning.
+warnings.filterwarnings("ignore", message="All-NaN slice encountered")
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from utils.config import load_config
 from utils.paths import ensure_dir
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "products"))
-from make_tercile_probability_maps import SEASON_MONTHS, get_season_leads
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 VAR_LEV = {"prec": "sfc", "tref": "2m"}
-
-# Models whose hindcast data lives under reforecast/ instead of hindcast/
-SFS_MODELS = {"NOAA-SFS"}
+SFS_MODELS = {"NOAA-SFS"}       # use reforecast/ path instead of hindcast/
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Shared helpers (unchanged from prior version)
 # ---------------------------------------------------------------------------
 
 def _to_0360(da: xr.DataArray) -> xr.DataArray:
-    """Convert longitude coordinate to 0-360 range and sort."""
     lon_name = "lon" if "lon" in da.dims else "longitude"
     if da[lon_name].min() < 0:
         da = da.assign_coords({lon_name: (da[lon_name] + 360) % 360}).sortby(lon_name)
@@ -54,7 +51,6 @@ def _to_0360(da: xr.DataArray) -> xr.DataArray:
 
 
 def _normalize_hindcast_dims(da: xr.DataArray) -> xr.DataArray:
-    """Rename raw NMME SubX dims to standard names and squeeze singleton init."""
     rmap = {}
     for old, new in [("S", "init"), ("M", "member"), ("L", "lead"),
                      ("X", "lon"), ("Y", "lat")]:
@@ -66,7 +62,7 @@ def _normalize_hindcast_dims(da: xr.DataArray) -> xr.DataArray:
         da = da.squeeze("init", drop=True)
     if "Z" in da.dims:
         da = da.isel(Z=0, drop=True)
-    # Convert float leads (0.5, 1.5, ...) to integers (0, 1, ...) so sel() works
+    # Convert float leads (0.5, 1.5, …) to integers so sel() works
     if "lead" in da.dims and not pd.api.types.is_integer_dtype(da["lead"].dtype):
         da = da.assign_coords(lead=da["lead"].values.astype(int))
     return da
@@ -78,56 +74,80 @@ def _hindcast_root(hindcast_root: Path, model: str, var: str) -> Path:
     return hindcast_root / model / "hindcast" / var
 
 
-def _season_calendar_months(init_month: int, l0: int, l1: int) -> list:
-    """Return ordered list of calendar months covered by the season leads."""
-    return [((init_month - 1 + l) % 12) + 1 for l in range(l0, l1)]
+def _decode_obs_time(ds: xr.Dataset) -> xr.Dataset:
+    try:
+        return xr.decode_cf(ds)
+    except Exception:
+        return ds
 
 
-def _valid_year(init_year: int, init_month: int, lead: int) -> int:
-    """Return the calendar year for a given initialization year/month and lead."""
-    return init_year + (init_month - 1 + lead) // 12
+def _obs_monthly_da(var: str, obs_precip: str, obs_tref: str) -> xr.DataArray:
+    if var == "prec":
+        ds = _decode_obs_time(xr.open_dataset(obs_precip))
+        da = ds["precip"].where(ds["precip"] > -9000)
+    else:
+        ds = _decode_obs_time(xr.open_dataset(obs_tref))
+        da = ds["air"]
+    rmap = {}
+    if "latitude" in da.dims:
+        rmap["latitude"] = "lat"
+    if "longitude" in da.dims:
+        rmap["longitude"] = "lon"
+    if rmap:
+        da = da.rename(rmap)
+    return _to_0360(da)
 
 
 # ---------------------------------------------------------------------------
-# Step 1-2: Load hindcast anomalies and compute pooled tercile thresholds
+# Hindcast loader — single lead (new)
 # ---------------------------------------------------------------------------
 
-def load_hindcast_seasonal_anoms(
+def load_hindcast_single_lead_anom(
     hindcast_root: Path,
     clim_root: Path,
     model: str,
     var: str,
     lev: str,
     init_month: int,
-    l0: int,
-    l1: int,
+    lead: int,
     start_year: int,
     end_year: int,
 ) -> tuple[xr.DataArray | None, list[int]]:
     """
-    Returns:
-        all_anoms : DataArray (year, member, lat, lon) of seasonal mean anomalies
-        years     : list of years that were successfully loaded
+    Load single-lead anomaly for all available hindcast years.
+
+    Returns
+    -------
+    all_anoms : DataArray (year, member, lat, lon), or None
+    years     : list of init years successfully loaded
     """
     root = _hindcast_root(hindcast_root, model, var)
     clim_path = clim_root / f"{model}.{var}_{lev}.clim.1991-2020.nc"
 
     if not clim_path.exists():
-        print(f"[SKIP] No climatology: {clim_path}")
         return None, []
 
     clim = xr.open_dataset(clim_path)[var]
     if not pd.api.types.is_integer_dtype(clim["lead"].dtype):
         clim = clim.assign_coords(lead=clim["lead"].astype(int))
 
-    yearly_anoms = []
-    years_found = []
+    if lead not in clim["lead"].values:
+        return None, []
+
+    valid_month = ((init_month - 1 + lead) % 12) + 1
+    if "month" in clim.dims and valid_month not in clim["month"].values:
+        return None, []
+
+    clim_sel = clim.sel(month=valid_month, lead=lead) if "month" in clim.dims \
+        else clim.sel(lead=lead)
+
+    yearly_anoms: list[xr.DataArray] = []
+    years_found: list[int] = []
 
     for year in range(start_year, end_year + 1):
         fp = root / f"{var}_{model}_{year}_{init_month:02d}.nc"
         if not fp.exists():
             continue
-
         try:
             ds = xr.open_dataset(fp, decode_times=False)
         except Exception as exc:
@@ -138,28 +158,14 @@ def load_hindcast_seasonal_anoms(
         da = _normalize_hindcast_dims(da)
         da = _to_0360(da)
 
-        # Average anomaly over season leads
-        lead_anoms = []
-        for l in range(l0, l1):
-            if l not in da["lead"].values:
-                continue
-            valid_month = ((init_month - 1 + l) % 12) + 1
-            if "month" in clim.dims and valid_month not in clim["month"].values:
-                continue
-            clim_sel = clim.sel(month=valid_month, lead=l) if "month" in clim.dims \
-                else clim.sel(lead=l)
-            da_lead = da.sel(lead=l)
-            # Align spatial grids before subtraction
-            da_lead, clim_sel = xr.align(da_lead, clim_sel, join="override")
-            lead_anoms.append(da_lead - clim_sel)
-
-        if not lead_anoms:
+        if lead not in da["lead"].values:
+            ds.close()
             continue
 
-        seasonal_anom = xr.concat(lead_anoms, dim="_tmp_lead").mean("_tmp_lead")
-        # Drop any leftover non-spatial/non-member coords
-        seasonal_anom = seasonal_anom.reset_coords(drop=True)
-        yearly_anoms.append(seasonal_anom.load())
+        da_lead = da.sel(lead=lead)
+        da_lead, clim_a = xr.align(da_lead, clim_sel, join="override")
+        anom = (da_lead - clim_a).reset_coords(drop=True)
+        yearly_anoms.append(anom.load())
         years_found.append(year)
         ds.close()
 
@@ -172,415 +178,454 @@ def load_hindcast_seasonal_anoms(
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Forecast tercile probabilities
+# Obs loader — single calendar month (new)
+# ---------------------------------------------------------------------------
+
+def obs_single_month_means(
+    obs_da: xr.DataArray,
+    valid_month: int,
+    start_year: int,
+    end_year: int,
+) -> tuple[xr.DataArray | None, list[int]]:
+    """
+    Select all occurrences of valid_month across start_year..end_year.
+
+    Returns
+    -------
+    result : DataArray (year, lat, lon) where year = the calendar year of the month
+    years  : list of years successfully loaded
+    """
+    slices: list[xr.DataArray] = []
+    years: list[int] = []
+
+    for y in range(start_year, end_year + 1):
+        try:
+            sl = obs_da.sel(time=f"{y}-{valid_month:02d}").squeeze()
+            slices.append(sl.load())
+            years.append(y)
+        except (KeyError, IndexError):
+            continue
+
+    if not slices:
+        return None, []
+
+    result = xr.concat(slices, dim="year")
+    result = result.assign_coords(year=("year", years))
+    return result, years
+
+
+# ---------------------------------------------------------------------------
+# Forecast tercile probabilities (unchanged)
 # ---------------------------------------------------------------------------
 
 def compute_forecast_probs(
     all_anoms: xr.DataArray,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
-    """
-    Derive pooled tercile thresholds and compute P(BN), P(NN), P(AN) per year.
-
-    all_anoms : (year, member, lat, lon)
-
-    Returns P_BN, P_NN, P_AN each of shape (year, lat, lon).
-    """
-    # Pool all (year × member) values to compute thresholds
+    """Derive pooled thresholds and return P(BN), P(NN), P(AN) per year."""
     pooled = all_anoms.stack(pool=("year", "member"))
     t33 = pooled.quantile(1 / 3, dim="pool").drop_vars("quantile", errors="ignore")
     t66 = pooled.quantile(2 / 3, dim="pool").drop_vars("quantile", errors="ignore")
-
-    # Classify each member in each year
     p_bn = (all_anoms < t33).mean("member").astype(float)
     p_an = (all_anoms > t66).mean("member").astype(float)
-    p_nn = 1.0 - p_bn - p_an
-    p_nn = p_nn.clip(0.0, 1.0)
-
+    p_nn = (1.0 - p_bn - p_an).clip(0.0, 1.0)
     return p_bn, p_nn, p_an
 
 
 # ---------------------------------------------------------------------------
-# Step 4-5: Observations
+# RPS / RPSS (refactored)
 # ---------------------------------------------------------------------------
 
-def _decode_obs_time(ds: xr.Dataset) -> xr.Dataset:
-    try:
-        return xr.decode_cf(ds)
-    except Exception:
-        return ds
-
-
-def _obs_monthly_da(var: str, obs_precip: str, obs_tref: str) -> xr.DataArray:
-    """Load the appropriate monthly obs dataset and return the DataArray."""
-    if var == "prec":
-        ds = _decode_obs_time(xr.open_dataset(obs_precip))
-        da = ds["precip"].where(ds["precip"] > -9000)
-    else:
-        ds = _decode_obs_time(xr.open_dataset(obs_tref))
-        da = ds["air"]
-
-    # Standardize spatial dim names
-    rmap = {}
-    if "latitude" in da.dims:
-        rmap["latitude"] = "lat"
-    if "longitude" in da.dims:
-        rmap["longitude"] = "lon"
-    if rmap:
-        da = da.rename(rmap)
-
-    da = _to_0360(da)
-    return da
-
-
-def obs_seasonal_means(
-    obs_da: xr.DataArray,
-    init_month: int,
-    l0: int,
-    l1: int,
-    start_year: int,
-    end_year: int,
-) -> tuple[xr.DataArray | None, list[int]]:
+def _rps_per_year(
+    p_bn: xr.DataArray,
+    p_nn: xr.DataArray,
+    obs_cat: xr.DataArray,
+) -> tuple[xr.DataArray, xr.DataArray]:
     """
-    Compute seasonal mean for each init year.
-
-    Returns:
-        result : DataArray (year, lat, lon)
-        years  : list of years with complete data
+    Per-sample RPS and RPS_clim.  Leading dimension is 'year'.
+    NaN where obs_cat is NaN (no obs data at that gridpoint).
     """
-    n_leads = l1 - l0
-    yearly = []
-    years = []
+    valid = obs_cat.notnull()
+    o_bn = (obs_cat == 0).where(valid)
+    o_nn = (obs_cat == 1).where(valid)
+    rps      = (p_bn - o_bn) ** 2 + (p_bn + p_nn - o_bn - o_nn) ** 2
+    rps_clim = (1.0 / 3 - o_bn) ** 2 + (2.0 / 3 - o_bn - o_nn) ** 2
+    return rps, rps_clim
 
-    for y in range(start_year, end_year + 1):
-        month_slices = []
-        for l in range(l0, l1):
-            valid_month = ((init_month - 1 + l) % 12) + 1
-            valid_year = _valid_year(y, init_month, l)
-            try:
-                sel = obs_da.sel(time=f"{valid_year}-{valid_month:02d}").squeeze()
-                month_slices.append(sel)
-            except (KeyError, IndexError):
-                break
-
-        if len(month_slices) == n_leads:
-            seasonal = xr.concat(month_slices, dim="_mon").mean("_mon")
-            yearly.append(seasonal.load())
-            years.append(y)
-
-    if not yearly:
-        return None, []
-
-    result = xr.concat(yearly, dim="year")
-    result = result.assign_coords(year=("year", years))
-    return result, years
-
-
-def classify_obs(obs_seasonal: xr.DataArray) -> xr.DataArray:
-    """
-    Classify observed seasonal values into tercile categories.
-    Returns DataArray (year, lat, lon) with values 0=BN, 1=NN, 2=AN, NaN where obs missing.
-    """
-    t33 = obs_seasonal.quantile(1 / 3, dim="year").drop_vars("quantile", errors="ignore")
-    t66 = obs_seasonal.quantile(2 / 3, dim="year").drop_vars("quantile", errors="ignore")
-
-    obs_cat = xr.where(obs_seasonal < t33, 0,
-              xr.where(obs_seasonal > t66, 2, 1)).astype(float)
-
-    # Mask gridpoints where obs had no valid data.  NaN comparisons silently
-    # fall through to the else-branch, producing spurious category=1 at
-    # gridpoints outside the obs domain (e.g. beyond CHIRPS ±50° lat).
-    # Use "any valid year" so a single missing year does not discard a point.
-    obs_valid = obs_seasonal.notnull().any("year")
-    obs_cat = obs_cat.where(obs_valid)
-    return obs_cat
-
-
-# ---------------------------------------------------------------------------
-# Core RPSS computation
-# ---------------------------------------------------------------------------
 
 def compute_rpss(
     p_bn: xr.DataArray,
     p_nn: xr.DataArray,
     obs_cat: xr.DataArray,
 ) -> xr.DataArray:
-    """
-    RPSS = 1 - mean(RPS_fcst) / mean(RPS_clim).
-
-    All inputs have dims (year, lat, lon).
-    Returns DataArray (lat, lon).
-    """
-    # Use .where() so NaN obs_cat (no-data gridpoints) propagates as NaN
-    # rather than silently becoming 0 via the False branch of == comparison.
-    valid = obs_cat.notnull()
-    o_bn = (obs_cat == 0).where(valid)
-    o_nn = (obs_cat == 1).where(valid)
-
-    rps_fcst = (p_bn - o_bn) ** 2 + (p_bn + p_nn - o_bn - o_nn) ** 2
-    rps_clim = (1.0 / 3 - o_bn) ** 2 + (2.0 / 3 - o_bn - o_nn) ** 2
-
-    mean_rps = rps_fcst.mean("year")
-    mean_rps_clim = rps_clim.mean("year")
-
-    return (1.0 - mean_rps / mean_rps_clim).rename("rpss")
+    """RPSS over the 'year' dimension."""
+    rps, rps_clim = _rps_per_year(p_bn, p_nn, obs_cat)
+    return (1.0 - rps.mean("year") / rps_clim.mean("year")).rename("rpss")
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Obs classification helper
+# ---------------------------------------------------------------------------
+
+def _classify_obs(
+    obs_interp: xr.DataArray,
+    t33: xr.DataArray,
+    t66: xr.DataArray,
+) -> xr.DataArray:
+    obs_cat = xr.where(obs_interp < t33, 0,
+              xr.where(obs_interp > t66, 2, 1)).astype(float)
+    obs_cat = obs_cat.where(obs_interp.notnull().any("year"))
+    return obs_cat
+
+
+# ---------------------------------------------------------------------------
+# Per-model RPSS computation
+# ---------------------------------------------------------------------------
+
+def _rpss_for_model(
+    model: str,
+    var: str,
+    lev: str,
+    hindcast_root: Path,
+    clim_root: Path,
+    obs_da: xr.DataArray,
+    max_lead: int,
+    start_year: int,
+    end_year: int,
+) -> xr.DataArray | None:
+    """
+    Compute RPSS(lead, lat, lon) for one model by pooling all init months.
+    Returns None if no data was found.
+    """
+    rpss_by_lead: dict[int, xr.DataArray] = {}
+    n_samples_by_lead: dict[int, int] = {}
+
+    # Obs tercile threshold cache: valid_month → (t33, t66) on model grid.
+    # Reset per model because different models may have different grids.
+    obs_thresh_cache: dict[int, tuple[xr.DataArray, xr.DataArray]] = {}
+    ref_lat: np.ndarray | None = None
+    ref_lon: np.ndarray | None = None
+
+    for lead in range(1, max_lead + 1):
+        rps_pool:      list[xr.DataArray] = []
+        rps_clim_pool: list[xr.DataArray] = []
+        sample_offset = 0
+
+        for init_month in range(1, 13):
+            valid_month      = ((init_month - 1 + lead) % 12) + 1
+            valid_yr_offset  = (init_month - 1 + lead) // 12   # 0 or 1
+
+            # --- hindcast ---
+            anoms, fcst_years = load_hindcast_single_lead_anom(
+                hindcast_root, clim_root, model, var, lev,
+                init_month, lead, start_year, end_year,
+            )
+            if anoms is None or len(fcst_years) < 5:
+                continue
+
+            if ref_lat is None:
+                ref_lat = anoms["lat"].values
+                ref_lon = anoms["lon"].values
+
+            p_bn, p_nn, _ = compute_forecast_probs(anoms)
+
+            # --- observations ---
+            obs_start = start_year + valid_yr_offset
+            obs_end   = end_year   + valid_yr_offset
+            obs_month, obs_valid_years = obs_single_month_means(
+                obs_da, valid_month, obs_start, obs_end,
+            )
+            if obs_month is None:
+                continue
+
+            # Re-label obs from valid_year to init_year for alignment
+            obs_init_years = [y - valid_yr_offset for y in obs_valid_years]
+            obs_by_init = obs_month.assign_coords(year=("year", obs_init_years))
+
+            common = sorted(set(fcst_years) & set(obs_init_years))
+            if len(common) < 5:
+                continue
+
+            p_bn_c = p_bn.sel(year=common)
+            p_nn_c = p_nn.sel(year=common)
+            obs_c  = obs_by_init.sel(year=common)
+
+            # Regrid obs to model grid
+            obs_interp = obs_c.interp(
+                lat=ref_lat, lon=ref_lon,
+                method="linear", kwargs={"fill_value": None},
+            )
+
+            # Obs thresholds: compute once per valid_month on this model's grid
+            if valid_month not in obs_thresh_cache:
+                obs_full, _ = obs_single_month_means(
+                    obs_da, valid_month, obs_start, obs_end,
+                )
+                if obs_full is None:
+                    continue
+                obs_full_i = obs_full.interp(
+                    lat=ref_lat, lon=ref_lon,
+                    method="linear", kwargs={"fill_value": None},
+                )
+                t33 = obs_full_i.quantile(1/3, dim="year").drop_vars("quantile", errors="ignore")
+                t66 = obs_full_i.quantile(2/3, dim="year").drop_vars("quantile", errors="ignore")
+                obs_thresh_cache[valid_month] = (t33, t66)
+
+            t33, t66 = obs_thresh_cache[valid_month]
+            obs_cat = _classify_obs(obs_interp, t33, t66)
+
+            # Per-year RPS, renamed to unique sample indices
+            rps, rps_clim = _rps_per_year(p_bn_c, p_nn_c, obs_cat)
+            n = rps.sizes["year"]
+            idx = np.arange(sample_offset, sample_offset + n)
+            rps_pool.append(
+                rps.assign_coords(year=idx).rename({"year": "sample"})
+            )
+            rps_clim_pool.append(
+                rps_clim.assign_coords(year=idx).rename({"year": "sample"})
+            )
+            sample_offset += n
+
+        if not rps_pool:
+            continue
+
+        all_rps      = xr.concat(rps_pool,      dim="sample")
+        all_rps_clim = xr.concat(rps_clim_pool, dim="sample")
+        rpss_L = (1 - all_rps.mean("sample") / all_rps_clim.mean("sample")).rename("rpss")
+
+        rpss_by_lead[lead]     = rpss_L
+        n_samples_by_lead[lead] = sample_offset
+        print(f"    lead={lead:2d}  n_samples={sample_offset}")
+
+    if not rpss_by_lead:
+        return None
+
+    leads    = sorted(rpss_by_lead.keys())
+    rpss_all = xr.concat([rpss_by_lead[l] for l in leads], dim="lead")
+    rpss_all = rpss_all.assign_coords(lead=("lead", leads))
+    rpss_all.attrs["n_samples"] = str({l: n_samples_by_lead[l] for l in leads})
+    return rpss_all
+
+
+# ---------------------------------------------------------------------------
+# CLI
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Compute RPSS skill for NMME tercile hindcasts."
+        description="Compute lead-based RPSS skill for NMME hindcasts."
     )
     p.add_argument("--config", default="confignmme.yaml")
-    p.add_argument("--var", required=True, choices=["prec", "tref"],
-                   help="Variable to process")
-    p.add_argument("--hindcast-root", required=True,
-                   help="Root containing per-model hindcast/reforecast directories")
-    p.add_argument("--clim-root", required=True,
-                   help="Root containing model climatology NetCDF files")
-    p.add_argument("--obs-precip", default=None,
-                   help="Path to CHIRPS monthly NetCDF (required for prec)")
-    p.add_argument("--obs-tref", default=None,
-                   help="Path to GHCN-CAMS monthly NetCDF (required for tref)")
-    p.add_argument("--outdir", required=True,
-                   help="Output directory for RPSS NetCDF files")
+    p.add_argument("--var", required=True, choices=["prec", "tref"])
+    p.add_argument("--hindcast-root", required=True)
+    p.add_argument("--clim-root",     required=True)
+    p.add_argument("--obs-precip", default=None)
+    p.add_argument("--obs-tref",   default=None)
+    p.add_argument("--outdir",     required=True)
     p.add_argument("--start-year", type=int, default=1991)
-    p.add_argument("--end-year", type=int, default=2020)
-    p.add_argument("--models", default="ALL",
-                   help="Comma-separated model names, or ALL")
-    p.add_argument("--seasons", default="ALL",
-                   help="Comma-separated season names, or ALL")
-    p.add_argument("--init-months", default="ALL",
-                   help="Comma-separated init months (1-12), or ALL")
-    p.add_argument("--overwrite", action="store_true",
-                   help="Overwrite existing output files")
+    p.add_argument("--end-year",   type=int, default=2020)
+    p.add_argument("--max-lead",   type=int, default=9)
+    p.add_argument("--models",     default="ALL")
+    p.add_argument("--overwrite",  action="store_true")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-
-    cfg = load_config(args.config)
-    var = args.var
-    lev = VAR_LEV[var]
+    cfg  = load_config(args.config)
+    var  = args.var
+    lev  = VAR_LEV[var]
 
     hindcast_root = Path(args.hindcast_root)
-    clim_root = Path(args.clim_root)
-    outdir = Path(args.outdir)
+    clim_root     = Path(args.clim_root)
+    outdir        = Path(args.outdir)
     ensure_dir(outdir)
 
-    # Observation source
     if var == "prec":
         if not args.obs_precip:
             print("[ERROR] --obs-precip required for var=prec")
             return 1
-        obs_path = args.obs_precip
+        obs_da = _obs_monthly_da(var, args.obs_precip, args.obs_precip)
     else:
         if not args.obs_tref:
             print("[ERROR] --obs-tref required for var=tref")
             return 1
-        obs_path = args.obs_tref
+        obs_da = _obs_monthly_da(var, args.obs_tref, args.obs_tref)
 
-    print(f"[INFO] Loading obs for {var} from {obs_path}")
-    obs_da = _obs_monthly_da(var, obs_path, obs_path)
-
-    # Filter model/season/init lists
     all_models = cfg["models"]
     models = all_models if args.models == "ALL" \
         else [m for m in args.models.split(",") if m in all_models]
 
-    all_seasons = list(SEASON_MONTHS.keys())
-    seasons = all_seasons if args.seasons == "ALL" \
-        else [s for s in args.seasons.split(",") if s in all_seasons]
-
-    all_init_months = list(range(1, 13))
-    init_months = all_init_months if args.init_months == "ALL" \
-        else [int(m) for m in args.init_months.split(",")]
-
     # ----------------------------------------------------------------
-    # Loop over models, init months, seasons
+    # Individual models
     # ----------------------------------------------------------------
     for model in models:
         print(f"\n{'='*60}")
         print(f"[MODEL] {model}  var={var}")
         print(f"{'='*60}")
 
-        for init_month in init_months:
-            for season in seasons:
-                out_path = outdir / f"{model}.{var}.init{init_month:02d}.{season}.rpss.{args.start_year}-{args.end_year}.nc"
+        out_path = outdir / f"{model}.{var}.rpss.{args.start_year}-{args.end_year}.nc"
+        if out_path.exists() and not args.overwrite:
+            print(f"[SKIP] {out_path.name}")
+            continue
 
-                if out_path.exists() and not args.overwrite:
-                    print(f"[SKIP] {out_path.name}")
-                    continue
+        rpss_all = _rpss_for_model(
+            model, var, lev,
+            hindcast_root, clim_root, obs_da,
+            args.max_lead, args.start_year, args.end_year,
+        )
+        if rpss_all is None:
+            print(f"[SKIP] No data for {model}")
+            continue
 
-                # Determine season lead window
-                try:
-                    l0, l1 = get_season_leads(
-                        f"{args.start_year}{init_month:02d}", season
-                    )
-                except RuntimeError:
-                    continue  # season not reachable from this init month
-
-                print(f"  init={init_month:02d}  season={season}  leads={l0}-{l1-1}")
-
-                # Step 1: hindcast anomalies
-                all_anoms, years = load_hindcast_seasonal_anoms(
-                    hindcast_root, clim_root, model, var, lev,
-                    init_month, l0, l1,
-                    args.start_year, args.end_year,
-                )
-                if all_anoms is None or len(years) < 10:
-                    print(f"  [SKIP] insufficient hindcast years ({len(years)})")
-                    continue
-
-                # Step 2-3: forecast probabilities
-                p_bn, p_nn, p_an = compute_forecast_probs(all_anoms)
-
-                # Step 4: obs seasonal means
-                obs_seasonal, obs_years = obs_seasonal_means(
-                    obs_da, init_month, l0, l1,
-                    args.start_year, args.end_year,
-                )
-                if obs_seasonal is None or len(obs_years) < 10:
-                    print(f"  [SKIP] insufficient obs years ({len(obs_years) if obs_years else 0})")
-                    continue
-
-                # Align hindcast and obs to common years
-                common_years = sorted(set(years) & set(obs_years))
-                if len(common_years) < 10:
-                    print(f"  [SKIP] too few common years ({len(common_years)})")
-                    continue
-
-                p_bn_c = p_bn.sel(year=common_years)
-                p_nn_c = p_nn.sel(year=common_years)
-                obs_s_c = obs_seasonal.sel(year=common_years)
-
-                # Regrid obs to model grid
-                model_lat = p_bn_c["lat"].values
-                model_lon = p_bn_c["lon"].values
-                obs_interp = obs_s_c.interp(
-                    lat=model_lat, lon=model_lon,
-                    method="linear", kwargs={"fill_value": None},
-                )
-
-                # Step 5: classify obs
-                obs_cat = classify_obs(obs_interp)
-
-                # Step 6: RPSS
-                rpss = compute_rpss(p_bn_c, p_nn_c, obs_cat)
-                rpss.attrs.update({
-                    "model": model,
-                    "var": var,
-                    "init_month": init_month,
-                    "season": season,
-                    "period": f"{args.start_year}-{args.end_year}",
-                    "n_years": len(common_years),
-                    "long_name": "Ranked Probability Skill Score",
-                    "valid_range": "-inf to 1 (positive = skilful)",
-                })
-
-                ds_out = rpss.to_dataset(name="rpss")
-                ds_out.to_netcdf(out_path, encoding={"rpss": {"zlib": True, "complevel": 1}})
-                print(f"  [SAVED] {out_path.name}")
+        rpss_all.attrs.update({
+            "model": model, "var": var,
+            "period": f"{args.start_year}-{args.end_year}",
+            "long_name": "Ranked Probability Skill Score",
+            "valid_range": "-inf to 1 (positive = skilful)",
+        })
+        ds_out = rpss_all.to_dataset(name="rpss")
+        ds_out.to_netcdf(out_path, encoding={"rpss": {"zlib": True, "complevel": 1}})
+        print(f"[SAVED] {out_path.name}")
 
     # ----------------------------------------------------------------
-    # MME: pool all models' anomalies, rerun steps 2-6
+    # MME: pool anomalies across all models, then same lead loop
     # ----------------------------------------------------------------
     print(f"\n{'='*60}")
     print(f"[MODEL] MME  var={var}")
     print(f"{'='*60}")
 
-    for init_month in init_months:
-        for season in seasons:
-            out_path = outdir / f"MME.{var}.init{init_month:02d}.{season}.rpss.{args.start_year}-{args.end_year}.nc"
+    out_path_mme = outdir / f"MME.{var}.rpss.{args.start_year}-{args.end_year}.nc"
+    if out_path_mme.exists() and not args.overwrite:
+        print(f"[SKIP] {out_path_mme.name}")
+    else:
+        rpss_by_lead_mme:    dict[int, xr.DataArray] = {}
+        n_samples_by_lead_mme: dict[int, int]        = {}
 
-            if out_path.exists() and not args.overwrite:
-                print(f"[SKIP] {out_path.name}")
-                continue
+        obs_thresh_cache_mme: dict[int, tuple] = {}
+        ref_lat = ref_lon = None
 
-            try:
-                l0, l1 = get_season_leads(f"{args.start_year}{init_month:02d}", season)
-            except RuntimeError:
-                continue
+        for lead in range(1, args.max_lead + 1):
+            rps_pool:      list[xr.DataArray] = []
+            rps_clim_pool: list[xr.DataArray] = []
+            sample_offset = 0
 
-            print(f"  init={init_month:02d}  season={season}  leads={l0}-{l1-1}")
+            for init_month in range(1, 13):
+                valid_month     = ((init_month - 1 + lead) % 12) + 1
+                valid_yr_offset = (init_month - 1 + lead) // 12
 
-            # Collect per-model anomaly arrays; regrid each to first-model grid
-            model_anoms = []
-            ref_lat = ref_lon = None
+                # Collect per-model anomaly arrays for this (init_month, lead)
+                model_anoms: list[xr.DataArray] = []
+                common_years_all: set[int] | None = None
 
-            for model in models:
-                anoms, _ = load_hindcast_seasonal_anoms(
-                    hindcast_root, clim_root, model, var, lev,
-                    init_month, l0, l1,
-                    args.start_year, args.end_year,
-                )
-                if anoms is None:
+                for model in models:
+                    anoms, fcst_years = load_hindcast_single_lead_anom(
+                        hindcast_root, clim_root, model, var, lev,
+                        init_month, lead, args.start_year, args.end_year,
+                    )
+                    if anoms is None:
+                        continue
+                    if ref_lat is None:
+                        ref_lat = anoms["lat"].values
+                        ref_lon = anoms["lon"].values
+                    # Regrid to reference grid if needed
+                    if not np.array_equal(anoms["lat"].values, ref_lat) or \
+                       not np.array_equal(anoms["lon"].values, ref_lon):
+                        anoms = anoms.interp(lat=ref_lat, lon=ref_lon,
+                                             method="linear",
+                                             kwargs={"fill_value": None})
+                    yr_set = set(fcst_years)
+                    common_years_all = yr_set if common_years_all is None \
+                        else common_years_all & yr_set
+                    model_anoms.append(anoms)
+
+                if not model_anoms or not common_years_all or len(common_years_all) < 5:
                     continue
 
-                # Use first model's grid as reference
-                if ref_lat is None:
-                    ref_lat = anoms["lat"].values
-                    ref_lon = anoms["lon"].values
-                    model_anoms.append(anoms)
-                else:
-                    anoms_r = anoms.interp(lat=ref_lat, lon=ref_lon, method="linear")
-                    model_anoms.append(anoms_r)
+                common_years = sorted(common_years_all)
+                # Pool members across models for common years
+                mme_pieces = [a.sel(year=common_years) for a in model_anoms]
+                mme_anoms  = xr.concat(mme_pieces, dim="member")
 
-            if not model_anoms:
-                print("  [SKIP] no model data for MME")
+                p_bn, p_nn, _ = compute_forecast_probs(mme_anoms)
+
+                # Obs
+                obs_start = args.start_year + valid_yr_offset
+                obs_end   = args.end_year   + valid_yr_offset
+                obs_month, obs_valid_years = obs_single_month_means(
+                    obs_da, valid_month, obs_start, obs_end,
+                )
+                if obs_month is None:
+                    continue
+
+                obs_init_years = [y - valid_yr_offset for y in obs_valid_years]
+                obs_by_init    = obs_month.assign_coords(year=("year", obs_init_years))
+                common = sorted(set(common_years) & set(obs_init_years))
+                if len(common) < 5:
+                    continue
+
+                p_bn_c = p_bn.sel(year=common)
+                p_nn_c = p_nn.sel(year=common)
+                obs_c  = obs_by_init.sel(year=common)
+                obs_interp = obs_c.interp(lat=ref_lat, lon=ref_lon,
+                                          method="linear",
+                                          kwargs={"fill_value": None})
+
+                if valid_month not in obs_thresh_cache_mme:
+                    obs_full, _ = obs_single_month_means(
+                        obs_da, valid_month, obs_start, obs_end,
+                    )
+                    if obs_full is None:
+                        continue
+                    obs_full_i = obs_full.interp(lat=ref_lat, lon=ref_lon,
+                                                  method="linear",
+                                                  kwargs={"fill_value": None})
+                    t33 = obs_full_i.quantile(1/3, dim="year").drop_vars("quantile", errors="ignore")
+                    t66 = obs_full_i.quantile(2/3, dim="year").drop_vars("quantile", errors="ignore")
+                    obs_thresh_cache_mme[valid_month] = (t33, t66)
+
+                t33, t66 = obs_thresh_cache_mme[valid_month]
+                obs_cat  = _classify_obs(obs_interp, t33, t66)
+
+                rps, rps_clim = _rps_per_year(p_bn_c, p_nn_c, obs_cat)
+                n   = rps.sizes["year"]
+                idx = np.arange(sample_offset, sample_offset + n)
+                rps_pool.append(
+                    rps.assign_coords(year=idx).rename({"year": "sample"})
+                )
+                rps_clim_pool.append(
+                    rps_clim.assign_coords(year=idx).rename({"year": "sample"})
+                )
+                sample_offset += n
+
+            if not rps_pool:
                 continue
 
-            # Select common years across models
-            common_years_mme = sorted(
-                set.intersection(*[set(a["year"].values.tolist()) for a in model_anoms])
-            )
-            if len(common_years_mme) < 10:
-                print(f"  [SKIP] too few common MME years ({len(common_years_mme)})")
-                continue
+            all_rps      = xr.concat(rps_pool,      dim="sample")
+            all_rps_clim = xr.concat(rps_clim_pool, dim="sample")
+            rpss_L = (1 - all_rps.mean("sample") / all_rps_clim.mean("sample")).rename("rpss")
+            rpss_by_lead_mme[lead]      = rpss_L
+            n_samples_by_lead_mme[lead] = sample_offset
+            print(f"    lead={lead:2d}  n_samples={sample_offset}")
 
-            mme_pieces = [a.sel(year=common_years_mme) for a in model_anoms]
-            # Concatenate along member dim to pool all models' members
-            mme_all = xr.concat(mme_pieces, dim="member")
-
-            p_bn_mme, p_nn_mme, _ = compute_forecast_probs(mme_all)
-
-            # Obs (same grid as first model)
-            obs_seasonal, obs_years = obs_seasonal_means(
-                obs_da, init_month, l0, l1,
-                args.start_year, args.end_year,
-            )
-            if obs_seasonal is None:
-                continue
-
-            common_obs_years = sorted(set(common_years_mme) & set(obs_years))
-            if len(common_obs_years) < 10:
-                continue
-
-            p_bn_mme_c = p_bn_mme.sel(year=common_obs_years)
-            p_nn_mme_c = p_nn_mme.sel(year=common_obs_years)
-            obs_interp = obs_seasonal.sel(year=common_obs_years).interp(
-                lat=ref_lat, lon=ref_lon, method="linear",
-                kwargs={"fill_value": None},
-            )
-            obs_cat = classify_obs(obs_interp)
-            rpss = compute_rpss(p_bn_mme_c, p_nn_mme_c, obs_cat)
-            rpss.attrs.update({
+        if rpss_by_lead_mme:
+            leads    = sorted(rpss_by_lead_mme.keys())
+            rpss_all = xr.concat([rpss_by_lead_mme[l] for l in leads], dim="lead")
+            rpss_all = rpss_all.assign_coords(lead=("lead", leads))
+            rpss_all.attrs.update({
                 "model": "MME",
                 "var": var,
-                "init_month": init_month,
-                "season": season,
                 "period": f"{args.start_year}-{args.end_year}",
-                "n_years": len(common_obs_years),
                 "models_included": ",".join(models),
+                "n_samples": str({l: n_samples_by_lead_mme[l] for l in leads}),
                 "long_name": "Ranked Probability Skill Score",
                 "valid_range": "-inf to 1 (positive = skilful)",
             })
-            ds_out = rpss.to_dataset(name="rpss")
-            ds_out.to_netcdf(out_path, encoding={"rpss": {"zlib": True, "complevel": 1}})
-            print(f"  [SAVED] {out_path.name}")
+            ds_out = rpss_all.to_dataset(name="rpss")
+            ds_out.to_netcdf(out_path_mme,
+                             encoding={"rpss": {"zlib": True, "complevel": 1}})
+            print(f"[SAVED] {out_path_mme.name}")
+        else:
+            print("[SKIP] MME: no data")
 
     print("\n[DONE]")
     return 0
