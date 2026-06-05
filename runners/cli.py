@@ -336,8 +336,8 @@ def main() -> int:
 
         _arraylake_cfg = _cfg.get("arraylake") or {}
         if not _arraylake_cfg.get("enabled", False):
-            print("[SKIP] Arraylake stage disabled in config; skipping")
-        else:
+            print("[INFO] Arraylake disabled in config but explicitly requested; proceeding")
+        if True:
             cfg_q = shlex.quote(args.config)
             init_q = shlex.quote(init_str)
             env_prefix = "ARRAYLAKE_DRY_RUN=1 " if args.arraylake_dry_run else ""

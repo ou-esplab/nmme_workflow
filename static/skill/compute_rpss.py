@@ -165,6 +165,8 @@ def load_hindcast_single_lead_anom(
         da_lead = da.sel(lead=lead)
         da_lead, clim_a = xr.align(da_lead, clim_sel, join="override")
         anom = (da_lead - clim_a).reset_coords(drop=True)
+        if "Z" in anom.dims:
+            anom = anom.squeeze("Z", drop=True)
         yearly_anoms.append(anom.load())
         years_found.append(year)
         ds.close()
@@ -243,6 +245,10 @@ def _rps_per_year(
     """
     Per-sample RPS and RPS_clim.  Leading dimension is 'year'.
     NaN where obs_cat is NaN (no obs data at that gridpoint).
+
+    Note: IRI's RPS category-adjustment (×2 for NN, ×0.8 for BN/AN) is not
+    applied here because it cancels in the RPSS ratio (both numerator and
+    denominator are multiplied by the same factor).
     """
     valid = obs_cat.notnull()
     o_bn = (obs_cat == 0).where(valid)
@@ -281,8 +287,10 @@ def _classify_obs(
 # Per-(init_month, lead) RPSS helpers
 # ---------------------------------------------------------------------------
 
-def _rpss_one_cell(
-    anoms: xr.DataArray,
+def _rpss_from_probs(
+    p_bn: xr.DataArray,
+    p_nn: xr.DataArray,
+    fcst_years: list[int],
     obs_da: xr.DataArray,
     init_month: int,
     lead: int,
@@ -293,14 +301,11 @@ def _rpss_one_cell(
     obs_thresh_cache: dict,
 ) -> xr.DataArray | None:
     """
-    Compute RPSS(lat, lon) for one (init_month, lead) cell.
-    Returns None if insufficient data.
+    Compute RPSS(lat, lon) given pre-computed p_bn/p_nn probability forecasts.
+    Shared by single-model and MME paths.
     """
-    valid_month    = ((init_month - 1 + lead) % 12) + 1
-    valid_yr_off   = (init_month - 1 + lead) // 12
-
-    p_bn, p_nn, _ = compute_forecast_probs(anoms)
-    fcst_years     = anoms["year"].values.tolist()
+    valid_month  = ((init_month - 1 + lead) % 12) + 1
+    valid_yr_off = (init_month - 1 + lead) // 12
 
     obs_start = start_year + valid_yr_off
     obs_end   = end_year   + valid_yr_off
@@ -336,6 +341,63 @@ def _rpss_one_cell(
     t33, t66 = obs_thresh_cache[valid_month]
     obs_cat  = _classify_obs(obs_interp, t33, t66)
     return compute_rpss(p_bn_c, p_nn_c, obs_cat)
+
+
+def _rpss_one_cell(
+    anoms: xr.DataArray,
+    obs_da: xr.DataArray,
+    init_month: int,
+    lead: int,
+    start_year: int,
+    end_year: int,
+    ref_lat: np.ndarray,
+    ref_lon: np.ndarray,
+    obs_thresh_cache: dict,
+) -> xr.DataArray | None:
+    """RPSS for one (init_month, lead) cell from a single model's anomalies."""
+    p_bn, p_nn, _ = compute_forecast_probs(anoms)
+    fcst_years     = anoms["year"].values.tolist()
+    return _rpss_from_probs(
+        p_bn, p_nn, fcst_years,
+        obs_da, init_month, lead, start_year, end_year,
+        ref_lat, ref_lon, obs_thresh_cache,
+    )
+
+
+def _rpss_one_cell_mme(
+    model_anoms_list: list[xr.DataArray],
+    obs_da: xr.DataArray,
+    init_month: int,
+    lead: int,
+    start_year: int,
+    end_year: int,
+    ref_lat: np.ndarray,
+    ref_lon: np.ndarray,
+    obs_thresh_cache: dict,
+) -> xr.DataArray | None:
+    """
+    RPSS for one (init_month, lead) cell using MME probability averaging.
+
+    Each model's tercile probabilities are computed independently from its own
+    pooled-member thresholds, then the probabilities are averaged across models.
+    This avoids conflating ensemble spreads from different models.
+    """
+    p_bn_list: list[xr.DataArray] = []
+    p_nn_list: list[xr.DataArray] = []
+    for anoms in model_anoms_list:
+        p_bn, p_nn, _ = compute_forecast_probs(anoms)
+        p_bn_list.append(p_bn)
+        p_nn_list.append(p_nn)
+
+    p_bn_mme = xr.concat(p_bn_list, dim="_m").mean("_m")
+    p_nn_mme = xr.concat(p_nn_list, dim="_m").mean("_m")
+    fcst_years = model_anoms_list[0]["year"].values.tolist()
+
+    return _rpss_from_probs(
+        p_bn_mme, p_nn_mme, fcst_years,
+        obs_da, init_month, lead, start_year, end_year,
+        ref_lat, ref_lon, obs_thresh_cache,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -451,8 +513,14 @@ def main() -> int:
         obs_da = _obs_monthly_da(var, args.obs_tref, args.obs_tref)
 
     all_models = cfg["models"]
-    models = all_models if args.models == "ALL" \
-        else [m for m in args.models.split(",") if m in all_models]
+    requested  = set(args.models.split(",")) if args.models != "ALL" else {"ALL"}
+    run_mme    = args.models == "ALL" or "MME" in requested
+    # Individual models to process (MME is not a real hindcast model)
+    indiv_requested = requested - {"MME", "ALL"}
+    models = all_models if args.models == "ALL" or not indiv_requested \
+        else [m for m in indiv_requested if m in all_models]
+    # MME always draws from all real models in config
+    mme_source_models = all_models
 
     # ----------------------------------------------------------------
     # Individual models
@@ -487,8 +555,12 @@ def main() -> int:
         print(f"[SAVED] {out_path.name}")
 
     # ----------------------------------------------------------------
-    # MME: pool members across all models per (init_month, lead)
+    # MME: probability averaging across all models
     # ----------------------------------------------------------------
+    if not run_mme:
+        print("\n[DONE]")
+        return 0
+
     print(f"\n{'='*60}")
     print(f"[MODEL] MME  var={var}")
     print(f"{'='*60}")
@@ -512,7 +584,7 @@ def main() -> int:
                 model_anoms: list[xr.DataArray] = []
                 common_years_all: set[int] | None = None
 
-                for model in models:
+                for model in mme_source_models:
                     anoms, fcst_years = load_hindcast_single_lead_anom(
                         hindcast_root, clim_root, model, var, lev,
                         init_month, lead, args.start_year, args.end_year,
@@ -535,12 +607,11 @@ def main() -> int:
                 if not model_anoms or not common_years_all or len(common_years_all) < 5:
                     continue
 
-                common_years = sorted(common_years_all)
-                mme_pieces   = [a.sel(year=common_years) for a in model_anoms]
-                mme_anoms    = xr.concat(mme_pieces, dim="member")
+                common_years    = sorted(common_years_all)
+                model_anoms_sel = [a.sel(year=common_years) for a in model_anoms]
 
-                rpss_cell = _rpss_one_cell(
-                    mme_anoms, obs_da, init_month, lead,
+                rpss_cell = _rpss_one_cell_mme(
+                    model_anoms_sel, obs_da, init_month, lead,
                     args.start_year, args.end_year,
                     ref_lat, ref_lon, obs_thresh_cache_mme,
                 )
@@ -562,7 +633,7 @@ def main() -> int:
             rpss_all.attrs.update({
                 "model": "MME", "var": var,
                 "period": f"{args.start_year}-{args.end_year}",
-                "models_included": ",".join(models),
+                "models_included": ",".join(mme_source_models),
                 "long_name": "Ranked Probability Skill Score",
                 "valid_range": "-inf to 1 (positive = skilful)",
             })
