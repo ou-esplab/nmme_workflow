@@ -54,11 +54,13 @@ def main() -> int:
         return 2
 
     cfg = load_config(cfg_path)
-    regions = cfg.get("pycpt", {}).get("regions", [])
-    global_models = cfg.get("models", [])
+
+    # Regions and seasons come from the top-level regions: block (same as products).
+    # pycpt.regions is only consulted for per-region model overrides.
+    regions = cfg.get("regions", [])
 
     if not regions:
-        print("[ERROR] No pycpt.regions defined in config.", file=sys.stderr)
+        print("[ERROR] No regions defined in config.", file=sys.stderr)
         return 3
 
     # Select regions
@@ -68,10 +70,18 @@ def main() -> int:
         else regions
     )
 
+    # Build a lookup for any pycpt-specific model overrides
+    pycpt_region_map = {
+        r["name"]: r
+        for r in cfg.get("pycpt", {}).get("regions", [])
+    }
+    global_models = cfg.get("models", [])
+
     shell_lines: List[str] = []
 
     for region in selected:
-        models = resolve_models(global_models, region)
+        pycpt_region = pycpt_region_map.get(region["name"], {})
+        models = resolve_models(global_models, pycpt_region)
 
         if args.models:
             models = list(args.models)
@@ -82,6 +92,7 @@ def main() -> int:
             fcstdate=args.fcstdate,
             region_name=region["name"],
             models=models,
+            dry_run=args.dry_run,
         )
 
         shell_lines.append(

@@ -10,10 +10,13 @@ def build_pycpt_cmd(
     fcstdate: str,
     region_name: str,
     models: Optional[List[str]] = None,
+    dry_run: bool = False,
 ) -> List[str]:
-    cmd = [script, str(config), fcstdate, "--only", region_name]
+    cmd = ["python", script, str(config), fcstdate, "--regname", region_name]
     if models:
         cmd += ["--models", *models]
+    if dry_run:
+        cmd.append("--dry-run")
     return cmd
 
 def build_conda_shell_line(
