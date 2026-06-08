@@ -10,7 +10,6 @@ models:
   - CanESM5
   - GEM5.2-NEMO
   - NCEP-CFSv2
-  - NCAR-CESM1
   - COLA-RSMAS-CCSM4
   - COLA-RSMAS-CESM1
   - NOAA-SFS

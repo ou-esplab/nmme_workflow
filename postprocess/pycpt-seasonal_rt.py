@@ -24,6 +24,20 @@ from utils import nmme_pycpt_utils as U
 from cptcore.functional import cca
 
 
+# Map 3-char season codes (used in standard config) to Mon-Mon format required by select_lead
+_SEASON_TO_MONMON = {
+    "DJF": "Dec-Feb", "JFM": "Jan-Mar", "FMA": "Feb-Apr",
+    "MAM": "Mar-May", "AMJ": "Apr-Jun", "MJJ": "May-Jul",
+    "JJA": "Jun-Aug", "JAS": "Jul-Sep", "ASO": "Aug-Oct",
+    "SON": "Sep-Nov", "OND": "Oct-Dec", "NDJ": "Nov-Jan",
+}
+
+
+def _pycpt_season(season: str) -> str:
+    """Convert 3-char code (MAM) to Mon-Mon format (Mar-May) if needed."""
+    return _SEASON_TO_MONMON.get(season, season)
+
+
 def main() -> int:
 
     # ---------------- CLI ----------------
@@ -175,7 +189,7 @@ def _run_season(
         try:
             selected_L = U.select_lead(
                 fdate=fdate,
-                season=season,
+                season=_pycpt_season(season),
                 L_coord=hc["L"].values,
             )
         except Exception as exc:
@@ -222,7 +236,7 @@ def _run_season(
 
     Y = U.prepare_predictand_for_cpt(
         Y=Y_raw,
-        season=season,
+        season=_pycpt_season(season),
         hindcast_years=hindcast_years,
     )
     
