@@ -20,6 +20,7 @@ from math import ceil
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
 import numpy as np
 import xarray as xr
 import cartopy.crs as ccrs
@@ -42,19 +43,15 @@ from products.make_tercile_probability_maps import (
 # ---------------------------------------------------------------------------
 
 ANOM_META = {
-    "prec": {
-        "label": "Precipitation Anomaly",
-        "unit": "mm/day",
-        "levels": [-10, -6, -4, -2, -1, -0.5, -0.25, 0.25, 0.5, 1, 2, 4, 6, 10],
-        "cmap": "BrBG",
-    },
-    "tref": {
-        "label": "2-m Temperature Anomaly",
-        "unit": "°C",
-        "levels": [-4, -3, -2, -1, -0.5, -0.25, 0.25, 0.5, 1, 2, 3, 4],
-        "cmap": "RdBu_r",
-    },
+    "prec": {"label": "Precipitation Anomaly", "unit": "mm/day", "cmap": "BrBG"},
+    "tref": {"label": "2-m Temperature Anomaly", "unit": "°C",   "cmap": "RdBu_r"},
 }
+
+# Preferred model display order — NCAR-CESM1 excluded (not a real-time model)
+_MODEL_ORDER = [
+    "NASA_GEOSS2S", "CanESM5", "GEM5_2_NEMO",
+    "NCEP_CFSv2", "COLA_RSMAS_CCSM4", "COLA_RSMAS_CESM1", "NOAA_SFS",
+]
 
 # Reverse-sanitize model variable names for plot labels
 _UNSANITIZE = {
@@ -66,9 +63,37 @@ _UNSANITIZE = {
     "NOAA_SFS":         "NOAA-SFS",
 }
 
+# Ensemble member counts per model (from hindcast M dimension)
+_NENS = {
+    "NASA_GEOSS2S":     4,
+    "CanESM5":         20,
+    "GEM5_2_NEMO":     20,
+    "NCEP_CFSv2":      24,
+    "COLA_RSMAS_CCSM4": 10,
+    "COLA_RSMAS_CESM1": 10,
+    "NOAA_SFS":        11,
+}
+_NENS_TOTAL = sum(_NENS.values())
+
 
 def _model_label(var_name: str) -> str:
-    return _UNSANITIZE.get(var_name, var_name)
+    label = _UNSANITIZE.get(var_name, var_name)
+    if var_name == "MME":
+        return f"MME\n({_NENS_TOTAL} ens)"
+    nens = _NENS.get(var_name)
+    return f"{label}\n({nens} ens)" if nens else label
+
+
+def _symmetric_levels(det_ds: xr.Dataset, n: int = 13) -> np.ndarray:
+    """Auto-scaled symmetric levels centered on 0 based on 98th-pct of abs values."""
+    all_vals = np.concatenate([
+        det_ds[v].values.ravel() for v in det_ds.data_vars
+    ])
+    abs_max = float(np.nanpercentile(np.abs(all_vals), 98))
+    abs_max = max(abs_max, 0.01)
+    # Round up to nearest 0.25
+    abs_max = float(np.ceil(abs_max * 4) / 4)
+    return np.linspace(-abs_max, abs_max, n)
 
 
 # ---------------------------------------------------------------------------
@@ -120,45 +145,67 @@ def plot_pycpt_anomalies(
     out_png: Path,
 ) -> None:
     meta = ANOM_META.get(var, ANOM_META["tref"])
-    model_vars = [v for v in det_ds.data_vars if v != "MME"]
-    all_vars = model_vars + (["MME"] if "MME" in det_ds.data_vars else [])
+
+    # Order models consistently; put MME last
+    present = set(det_ds.data_vars)
+    ordered = [v for v in _MODEL_ORDER if v in present]
+    ordered += [v for v in present if v not in ordered and v != "MME"]
+    if "MME" in present:
+        ordered.append("MME")
+
+    levels = _symmetric_levels(det_ds)
+    norm = TwoSlopeNorm(vmin=levels[0], vcenter=0.0, vmax=levels[-1])
 
     ncols = 3
-    nrows = ceil(len(all_vars) / ncols)
+    nrows = ceil(len(ordered) / ncols)
     fig, axes = plt.subplots(
         nrows, ncols,
-        figsize=(6 * ncols, 4 * nrows),
+        figsize=(11, 3.5 * nrows + 1),
         subplot_kw={"projection": ccrs.PlateCarree()},
+        constrained_layout=True,
     )
     axes_flat = np.array(axes).flatten()
 
-    for i, vname in enumerate(all_vars):
+    mappable = None
+    da_ref = det_ds[ordered[0]]
+    ext = [float(da_ref.lon.min()), float(da_ref.lon.max()),
+           float(da_ref.lat.min()), float(da_ref.lat.max())]
+
+    for i, vname in enumerate(ordered):
         ax = axes_flat[i]
         da = det_ds[vname]
-        ext = [float(da.lon.min()), float(da.lon.max()),
-               float(da.lat.min()), float(da.lat.max())]
         ax.set_extent(ext, crs=ccrs.PlateCarree())
         cf = ax.contourf(
             da["lon"], da["lat"], da,
-            levels=meta["levels"],
+            levels=levels,
             cmap=meta["cmap"],
+            norm=norm,
             extend="both",
             transform=ccrs.PlateCarree(),
         )
-        fig.colorbar(cf, ax=ax, label=meta["unit"], shrink=0.85, pad=0.03)
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
         ax.add_feature(cfeature.BORDERS, linewidth=0.6)
         ax.add_feature(cfeature.STATES, linewidth=0.4)
-        ax.set_title(_model_label(vname), fontsize=10, weight="bold")
+        ax.set_title(_model_label(vname), fontsize=9)
+        mappable = cf
 
-    for j in range(len(all_vars), len(axes_flat)):
+    for j in range(len(ordered), len(axes_flat)):
         axes_flat[j].set_visible(False)
 
     fig.suptitle(
-        f"PyCPT {meta['label']}  |  {init_yyyymm}  {region}  {season}",
-        fontsize=14, weight="bold",
+        f"PyCPT Bias-Corrected {meta['label']}\n{init_yyyymm}  {region}  {season}",
+        fontsize=12, weight="bold",
     )
-    fig.tight_layout()
+    if mappable is not None:
+        fig.colorbar(
+            mappable,
+            ax=[axes_flat[i] for i in range(len(ordered))],
+            orientation="horizontal",
+            fraction=0.04,
+            pad=0.04,
+            label=meta["unit"],
+        )
+
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=120, bbox_inches="tight")
     plt.close(fig)
@@ -240,18 +287,19 @@ def main() -> int:
                 da_mme.sel(cat="an").drop_vars("cat"), f"{region}/{season}/AN"),
         }
 
-        lead_label = f"PyCPT MOS"
+        lead_label = "PyCPT Bias-Corrected"
+        var_label  = f"{var} | PyCPT Bias-Corrected"
 
         out_tp = img_root / "tercile_probs" / region / f"{stem}_tercile_probs.png"
         plot_probabilities(prob, region, season, init, lead_label, out_tp)
         print(f"  [SAVED] {out_tp.name}")
 
         out_ml = img_root / "most_likely" / region / f"{stem}_most_likely.png"
-        plot_most_likely_from_prob(prob, region, season, init, var, out_ml)
+        plot_most_likely_from_prob(prob, region, season, init, var_label, out_ml)
         print(f"  [SAVED] {out_ml.name}")
 
         out_cd = img_root / "cpt_dominant" / region / f"{stem}_cpt_dominant.png"
-        plot_cpt_dominant_from_prob(prob, region, season, init, var, out_cd)
+        plot_cpt_dominant_from_prob(prob, region, season, init, var_label, out_cd)
         print(f"  [SAVED] {out_cd.name}")
 
         prob_ds.close()

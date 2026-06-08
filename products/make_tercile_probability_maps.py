@@ -697,8 +697,11 @@ def plot_most_likely_from_prob(
     prob_of_choice = stacked.max(dim="tercile")
     most_likely = most_likely.where(prob_of_choice > mask_threshold)
 
-    fig = plt.figure(figsize=(8, 6))
-    ax = plt.axes(projection=ccrs.PlateCarree())
+    fig, ax = plt.subplots(
+        1, 1, figsize=(9, 7),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+        constrained_layout=True,
+    )
 
     cmap = ListedColormap([
         "#2166ac",  # Below Normal
@@ -738,14 +741,13 @@ def plot_most_likely_from_prob(
     ax.add_feature(cfeature.BORDERS, linewidth=0.7)
     ax.add_feature(cfeature.STATES, linewidth=0.4)
 
-    ax.set_title(
-        f"NMME {init_yyyymm} {season} Most-Likely Tercile - {region} ({forecast_var})\n"
-        f"Shown where probability > {mask_threshold:.0f}%",
-        fontsize=13,
+    fig.suptitle(
+        f"NMME {init_yyyymm} {season} Most-Likely Tercile - {region}\n"
+        f"{forecast_var}  |  Shown where probability > {mask_threshold:.0f}%",
+        fontsize=12,
         weight="bold",
     )
 
-    plt.tight_layout()
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -803,7 +805,7 @@ def plot_cpt_dominant_from_prob(
     mask = dominant_val >= (mask_threshold / 100.0)
 
     fig, ax = plt.subplots(
-        figsize=(9, 5),
+        figsize=(9, 6),
         subplot_kw=dict(projection=ccrs.PlateCarree()),
     )
 
@@ -835,18 +837,20 @@ def plot_cpt_dominant_from_prob(
         crs=ccrs.PlateCarree(),
     )
 
+    ax.set_title("")  # clear xarray's auto-title from the last isel plot call
     ax.add_feature(cfeature.COASTLINE, linewidth=0.9)
     ax.add_feature(cfeature.BORDERS, linewidth=0.7)
     ax.add_feature(cfeature.STATES, linewidth=0.4)
 
-    ax.set_title(
-        f"NMME {init_yyyymm} {season} Dominant Tercile Probability - {region} ({forecast_var})",
-        fontsize=13,
+    fig.suptitle(
+        f"NMME {init_yyyymm} {season} Dominant Tercile Probability - {region}\n"
+        f"{forecast_var}",
+        fontsize=12,
         weight="bold",
     )
 
     _add_cpt_colorbars(fig, ax)
-    plt.subplots_adjust(bottom=0.25)
+    plt.subplots_adjust(top=0.88, bottom=0.18)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
