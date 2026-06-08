@@ -4,12 +4,15 @@
 # Intended crontab entry (runs on the 8th of each month at 03:00 UTC):
 #   0 3 8 * *  /home/kpegion/projects/nmme_workflow/scripts/cron_nmme.sh >> /home/kpegion/projects/nmme_workflow/logs/cron.log 2>&1
 #
-# Optional overrides via environment variables:
-#   NMME_CONFIG   — path to config YAML (default: confignmme.yaml next to scripts/)
-#   NMME_INIT     — override forecast init date as YYYYMM (default: previous month)
-#   NMME_STAGES   — space-separated stage list (default: ingest preprocess products pycpt publish)
-#   CONDA_BASE    — path to miniconda/anaconda root (default: ~/miniconda3)
-#   ENV_NAME      — conda environment name (default: nmme_workflow_env)
+# Usage: cron_nmme.sh [OPTIONS]
+#   -s, --stages STAGES   Space-separated stage list (default: ingest preprocess products publish arraylake)
+#   -i, --init   YYYYMM   Forecast init date (default: current month)
+#   -c, --config FILE     Path to config YAML (default: confignmme.yaml)
+#   -e, --env    NAME     Conda environment name (default: nmme_workflow_env)
+#       --conda-base DIR  Path to miniconda/anaconda root (default: ~/miniconda3)
+#   -h, --help            Show this help
+#
+# Options override environment variables (NMME_STAGES, NMME_INIT, NMME_CONFIG, ENV_NAME, CONDA_BASE).
 
 set -euo pipefail
 
@@ -18,11 +21,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
-# ---- Configuration ----------------------------------------------------------
+# ---- Defaults from environment ----------------------------------------------
 CONFIG="${NMME_CONFIG:-$ROOT_DIR/confignmme.yaml}"
-STAGES="${NMME_STAGES:-ingest preprocess products publish}"
+STAGES="${NMME_STAGES:-ingest preprocess products publish arraylake}"
 CONDA_BASE="${CONDA_BASE:-$HOME/miniconda3}"
 ENV_NAME="${ENV_NAME:-nmme_workflow_env}"
+INIT_ARG="${NMME_INIT:-}"
+
+# ---- Parse CLI arguments (override env vars) --------------------------------
+usage() {
+    sed -n '/#/!d; s/^# \{0,1\}//p' "$0" | sed -n '/^Usage:/,/^$/p'
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -s|--stages)    STAGES="$2";    shift 2 ;;
+        -i|--init)      INIT_ARG="$2";  shift 2 ;;
+        -c|--config)    CONFIG="$2";    shift 2 ;;
+        -e|--env)       ENV_NAME="$2";  shift 2 ;;
+        --conda-base)   CONDA_BASE="$2"; shift 2 ;;
+        -h|--help)      usage ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
 LOCK_FILE="$ROOT_DIR/.nmme_cron.lock"
 
 # ---- Logging ----------------------------------------------------------------
@@ -66,8 +89,8 @@ set -u
 log "[INFO] Using conda env: $ENV_NAME"
 
 # ---- Resolve forecast init date (YYYYMM) ------------------------------------
-if [[ -n "${NMME_INIT:-}" ]]; then
-    INIT_DATE="$NMME_INIT"
+if [[ -n "$INIT_ARG" ]]; then
+    INIT_DATE="$INIT_ARG"
     log "[INFO] Using provided init date: $INIT_DATE"
 else
     # Default: current month (NMME forecasts are available by the 5th-8th)
