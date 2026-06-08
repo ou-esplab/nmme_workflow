@@ -28,43 +28,47 @@ def main() -> int:
     with input_path.open("r", encoding="utf-8") as f:
         soup = BeautifulSoup(f.read(), "html.parser")
 
-    select = soup.find("select", {"id": "fcstselectdate"})
-    if not select:
-        raise RuntimeError("No <select id='fcstselectdate'> found in input HTML")
+    select_ids = ["fcstselectdate", "srselectdate"]
 
-    if args.dates is not None:
-        # Replace date options with exactly the given list (sorted newest-first),
-        # always keeping "Latest" as the first option.
-        date_list = sorted(
-            {d for d in args.dates.split() if len(d) == 6 and d.isdigit()} | {fcstdate},
-            reverse=True,
-        )
-        # Remove all existing options
-        for opt in select.find_all("option"):
-            opt.decompose()
-        # Re-add Latest + the date list
-        latest_opt = soup.new_tag("option")
-        latest_opt.string = "Latest"
-        select.append(latest_opt)
-        for d in date_list:
-            opt = soup.new_tag("option")
-            opt.string = d
-            select.append(opt)
-    else:
-        # Legacy behaviour: just insert fcstdate if missing
-        options = select.find_all("option")
-        existing = {opt.get_text(strip=True) for opt in options}
-        if fcstdate not in existing:
-            anchor = next(
-                (o for o in options if o.get_text(strip=True).lower() == "latest"),
-                options[0] if options else None,
+    for select_id in select_ids:
+        select = soup.find("select", {"id": select_id})
+        if not select:
+            continue
+
+        if args.dates is not None:
+            # Replace date options with exactly the given list (sorted newest-first),
+            # always keeping "Latest" as the first option.
+            date_list = sorted(
+                {d for d in args.dates.split() if len(d) == 6 and d.isdigit()} | {fcstdate},
+                reverse=True,
             )
-            new_option = soup.new_tag("option")
-            new_option.string = fcstdate
-            if anchor:
-                anchor.insert_after(new_option)
-            else:
-                select.append(new_option)
+            for opt in select.find_all("option"):
+                opt.decompose()
+            latest_opt = soup.new_tag("option")
+            latest_opt.string = "Latest"
+            select.append(latest_opt)
+            for d in date_list:
+                opt = soup.new_tag("option")
+                opt.string = d
+                select.append(opt)
+        else:
+            # Legacy behaviour: just insert fcstdate if missing
+            options = select.find_all("option")
+            existing = {opt.get_text(strip=True) for opt in options}
+            if fcstdate not in existing:
+                anchor = next(
+                    (o for o in options if o.get_text(strip=True).lower() == "latest"),
+                    options[0] if options else None,
+                )
+                new_option = soup.new_tag("option")
+                new_option.string = fcstdate
+                if anchor:
+                    anchor.insert_after(new_option)
+                else:
+                    select.append(new_option)
+
+    if not soup.find("select", {"id": "fcstselectdate"}):
+        raise RuntimeError("No <select id='fcstselectdate'> found in input HTML")
 
     with output_path.open("w", encoding="utf-8") as f:
         print("Writing new forecasts.html file to", output_path)
