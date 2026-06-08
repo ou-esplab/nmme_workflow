@@ -29,7 +29,7 @@ def main() -> int:
         "--stages",
         nargs="+",
         default=["ingest", "preprocess", "products", "pycpt"],
-        help="Stages to run in order. Optional static: climatology terciles. Main: ingest preprocess products pycpt publish ship-routing-products",
+        help="Stages to run in order. Optional static: climatology terciles. Main: ingest preprocess products pycpt pycpt_maps publish ship-routing-products",
     )
     p.add_argument(
         "--climatology-root",
@@ -354,6 +354,19 @@ def main() -> int:
             cmd.append("--use-mamba")
 
         stage_cmds["pycpt"] = cmd
+
+    # ---------- PyCPT Maps ----------
+    if "pycpt_maps" in args.stages:
+        import yaml as _yaml
+        with open(args.config) as _f:
+            _maps_cfg = _yaml.safe_load(_f) or {}
+        _nmme_env = _maps_cfg.get("environments", {}).get("nmme", "nmme_workflow_env")
+        stage_cmds["pycpt_maps"] = [
+            "conda", "run", "-n", _nmme_env,
+            "python", "products/make_pycpt_maps.py",
+            "--init", init_str,
+            "--config", args.config,
+        ]
 
     # ---------- Publish ----------
     if "publish" in args.stages:
