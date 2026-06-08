@@ -693,7 +693,7 @@ def plot_most_likely_from_prob(
         coords="minimal",
     )
 
-    most_likely = stacked.argmax(dim="tercile")
+    most_likely = stacked.fillna(0.0).argmax(dim="tercile")
     prob_of_choice = stacked.max(dim="tercile")
     most_likely = most_likely.where(prob_of_choice > mask_threshold)
 
@@ -798,7 +798,7 @@ def plot_cpt_dominant_from_prob(
     ) / 100.0
 
     prob_stack = prob_stack.assign_coords(category=["BN", "NN", "AN"])
-    dominant_cat = prob_stack.argmax("category")
+    dominant_cat = prob_stack.fillna(0.0).argmax("category")
     dominant_val = prob_stack.max("category")
     mask = dominant_val >= (mask_threshold / 100.0)
 
