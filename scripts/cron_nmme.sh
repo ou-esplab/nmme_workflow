@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # cron_nmme.sh — monthly NMME forecast workflow cron wrapper
 #
-# Intended crontab entry (e.g. runs on the 15th of each month at 03:00 UTC):
-#   0 3 15 * *  /home/kpegion/projects/nmme_workflow/scripts/cron_nmme.sh >> /home/kpegion/projects/nmme_workflow/logs/cron.log 2>&1
+# Intended crontab entry (runs on the 8th of each month at 03:00 UTC):
+#   0 3 8 * *  /home/kpegion/projects/nmme_workflow/scripts/cron_nmme.sh >> /home/kpegion/projects/nmme_workflow/logs/cron.log 2>&1
 #
 # Optional overrides via environment variables:
 #   NMME_CONFIG   — path to config YAML (default: confignmme.yaml next to scripts/)
@@ -70,10 +70,9 @@ if [[ -n "${NMME_INIT:-}" ]]; then
     INIT_DATE="$NMME_INIT"
     log "[INFO] Using provided init date: $INIT_DATE"
 else
-    # Default: previous month (NMME data is typically available ~2 weeks into
-    # the current month for the previous month's initialization)
-    INIT_DATE="$(date -u -d 'last month' +%Y%m)"
-    log "[INFO] Resolved init date (previous month): $INIT_DATE"
+    # Default: current month (NMME forecasts are available by the 5th-8th)
+    INIT_DATE="$(date -u +%Y%m)"
+    log "[INFO] Resolved init date (current month): $INIT_DATE"
 fi
 
 # ---- Run workflow -----------------------------------------------------------

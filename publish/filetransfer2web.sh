@@ -283,8 +283,12 @@ _html_out="${script_dir}/forecasts.${fcstdate}.out.html"
 if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
   echo "[DRY-RUN] would sync forecasts.html date list from ${PUBLISH_DEST_DIR}/images/"
 else
+  # Filter locally so remote login-shell noise (tcsh stdout on connect) does not
+  # pollute the date list. Omit 2>/dev/null from the remote command: tcsh treats
+  # it as a filename arg, and SSH stderr is not captured here anyway.
   _remote_dates=$(ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
-    "ls '${PUBLISH_DEST_DIR}/images/' 2>/dev/null | grep -E '^[0-9]{6}$' | tr '\n' ' '" || true)
+    "ls '${PUBLISH_DEST_DIR}/images/'" \
+    | grep -E '^[0-9]{6}$' | tr '\n' ' ' || true)
   if [[ -n "$_remote_dates" ]] && \
      scp -q -i "${ssh_key_expanded}" \
        "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/forecasts.html" "$_html_in" 2>/dev/null; then
