@@ -66,22 +66,30 @@ def main() -> int:
 
     region_name = args.regname or args.only
     if region_name:
-        region = U.get_region(cfg.get("pycpt", {}).get("regions", []), region_name)
+        # lat/lon/seasons come from the top-level regions: block
+        region = U.get_region(cfg.get("regions", []), region_name)
     elif args.lat_minmax is not None and args.lon_minmax is not None and args.training_season is not None:
         region = {
             "name": "custom",
             "lat": list(args.lat_minmax),
             "lon": list(args.lon_minmax),
-            "season": args.training_season,
+            "seasons": [args.training_season],
         }
     else:
         raise SystemExit("[ERROR] Must specify --regname/--only or --lat_minmax/--lon_minmax plus --training_season")
 
-    # Override season if explicitly provided
+    seasons = region.get("seasons", [])
+    if not seasons:
+        raise SystemExit(f"[ERROR] No seasons defined for region {region['name']}")
     if args.training_season is not None:
-        region["season"] = args.training_season
+        if args.training_season not in seasons:
+            raise SystemExit(f"[ERROR] --training_season {args.training_season!r} not in region seasons: {seasons}")
+        seasons = [args.training_season]
 
-    models_used = U.resolve_models(cfg.get("models", []), region)
+    # pycpt.regions may have a per-region models override
+    pycpt_region_map = {r["name"]: r for r in cfg.get("pycpt", {}).get("regions", [])}
+    pycpt_region = pycpt_region_map.get(region["name"], {})
+    models_used = U.resolve_models(cfg.get("models", []), pycpt_region)
     if args.models:
         models_used = list(args.models)
 
@@ -93,6 +101,7 @@ def main() -> int:
     patterns = local_cfg.get("path_patterns", {})
 
     print(f"[INFO] Region: {region['name']}")
+    print(f"[INFO] Seasons: {seasons}")
     print(f"[INFO] Models: {', '.join(models_used)}")
 
     # ---------------- Predictand ----------------
@@ -106,6 +115,38 @@ def main() -> int:
     lat_min, lat_max = region["lat"]
     lon_min, lon_max = region["lon"]
     Y_raw = Y_raw.sel(Y=slice(lat_min, lat_max), X=slice(lon_min, lon_max))
+
+    rc = 0
+    for season in seasons:
+        print(f"\n[INFO] ===== Season: {season} =====")
+        rc_season = _run_season(
+            cfg=cfg,
+            region=region,
+            season=season,
+            models_used=models_used,
+            model_var=model_var,
+            model_base_map=model_base_map,
+            patterns=patterns,
+            root=root,
+            local_cfg=local_cfg,
+            Y_raw=Y_raw,
+            lat_min=lat_min, lat_max=lat_max,
+            lon_min=lon_min, lon_max=lon_max,
+            fdate=fdate,
+            fcst_yyyymm=fcst_yyyymm,
+            dry_run=args.dry_run,
+        )
+        if rc_season != 0:
+            rc = rc_season
+    return rc
+
+
+def _run_season(
+    cfg, region, season, models_used, model_var, model_base_map,
+    patterns, root, local_cfg, Y_raw,
+    lat_min, lat_max, lon_min, lon_max,
+    fdate, fcst_yyyymm, dry_run,
+) -> int:
 
     # ============================================================
     # PART 1: HINDCAST TRAINING DATA
@@ -134,7 +175,7 @@ def main() -> int:
         try:
             selected_L = U.select_lead(
                 fdate=fdate,
-                season=region["season"],
+                season=season,
                 L_coord=hc["L"].values,
             )
         except Exception as exc:
@@ -181,7 +222,7 @@ def main() -> int:
 
     Y = U.prepare_predictand_for_cpt(
         Y=Y_raw,
-        season=region["season"],
+        season=season,
         hindcast_years=hindcast_years,
     )
     
