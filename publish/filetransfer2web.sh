@@ -102,6 +102,7 @@ PUBLISH_DEST_DIR="${PUBLISH_DEST_DIR:-$(cfg_get 'pipeline.publish.dest_dir' '/da
 PUBLISH_SSH_KEY="${PUBLISH_SSH_KEY:-$(cfg_get 'pipeline.publish.ssh_key' '~/.ssh/id_ed25519')}"
 PUBLISH_COPY_STATIC_ONCE="${PUBLISH_COPY_STATIC_ONCE:-$(cfg_get 'pipeline.publish.copy_static_once' '1')}"
 PUBLISH_COPY_STATIC_FORCE="${PUBLISH_COPY_STATIC_FORCE:-$(cfg_get 'pipeline.publish.copy_static_force' '0')}"
+PUBLISH_COPY_HTML_FORCE="${PUBLISH_COPY_HTML_FORCE:-$(cfg_get 'pipeline.publish.copy_html_force' '0')}"
 PUBLISH_STATIC_CLIMO_SRC="${PUBLISH_STATIC_CLIMO_SRC:-$(cfg_get 'pipeline.publish.static_climatology_source' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
 PUBLISH_STATIC_TERCILES_SRC="${PUBLISH_STATIC_TERCILES_SRC:-$(cfg_get 'pipeline.publish.static_terciles_source' '/data/esplab/shared/model/initialized/nmme/terciles/1991-2020')}"
 PUBLISH_HINDCASTS_DEST_DIR="${PUBLISH_HINDCASTS_DEST_DIR:-$(cfg_get 'pipeline.publish.hindcasts_dest_dir' '')}"
@@ -263,16 +264,16 @@ else
   echo "[WARN] docs/products_outputs.md not found; skipping docs publish"
 fi
 
-# One-time: copy the HTML template to the destination if it doesn't exist yet.
-# This allows a new dest_dir to work immediately without a manual copy.
+# Copy the HTML template to the destination if it doesn't exist yet, or if
+# copy_html_force=true (use to push structural changes to forecasts.remote.html).
 _remote_html="${PUBLISH_DEST_DIR}/forecasts.html"
 _local_html="${script_dir}/forecasts.remote.html"
 if [[ -f "$_local_html" ]]; then
   if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
-    echo "[DRY-RUN] would copy forecasts.remote.html -> ${_remote_html} if not present"
-  elif ! ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "test -f '${_remote_html}'"; then
+    echo "[DRY-RUN] would copy forecasts.remote.html -> ${_remote_html} (force=${PUBLISH_COPY_HTML_FORCE})"
+  elif [[ "$PUBLISH_COPY_HTML_FORCE" == "1" ]] || ! ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "test -f '${_remote_html}'"; then
     run_cmd scp -i "${ssh_key_expanded}" "$_local_html" "${PUBLISH_DEST_HOST}:${_remote_html}"
-    echo "[INFO] Initialized ${_remote_html}"
+    echo "[INFO] Copied forecasts.remote.html -> ${_remote_html}"
   fi
 fi
 
