@@ -26,6 +26,9 @@
      <option value="monthly">Monthly Anomalies</option>
      <option value="tercile_probs">Seasonal Tercile Probabilities</option>
      <option value="cpt_dominant">Combined Tercile Probabilities</option>
+     <option value="pycpt_anomalies">Monthly Anomalies: PyCPT</option>
+     <option value="pycpt_tercile_probs">Seasonal Tercile Probabilities: PyCPT</option>
+     <option value="pycpt_cpt_dominant">Combined Tercile Probabilities: PyCPT</option>
     </select>
    </div>
    <div class="form-group" style="margin-right:10px">
@@ -188,6 +191,7 @@
   };
 
   var seasonalRegions = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
+  var pycptRegions    = ["Mexico", "Iran", "Venezuela"];
 
   function populateSelect(id, options) {
     var sel = document.getElementById(id);
@@ -214,6 +218,8 @@
     if (type === "monthly") {
       var regions = (monthlyVars[varVal] || monthlyVars["Precip"]).regions;
       populateSelect("fcstselectregion", regions);
+    } else if (type.startsWith("pycpt_")) {
+      populateSelect("fcstselectregion", pycptRegions);
     } else {
       populateSelect("fcstselectregion", seasonalRegions);
     }
@@ -229,6 +235,12 @@
     return latest;
   }
 
+  var pycptProductMap = {
+    "pycpt_anomalies":     "anomalies",
+    "pycpt_tercile_probs": "tercile_probs",
+    "pycpt_cpt_dominant":  "cpt_dominant"
+  };
+
   function buildImagePath() {
     var type         = document.getElementById("fcstselecttype").value;
     var date         = document.getElementById("fcstselectdate").value.trim();
@@ -243,6 +255,14 @@
       if (!cfg) return null;
       return "images/" + resolvedDate + "/monthly/" + region + "/" +
              cfg.varPrefix + region + "Month" + leadNum + ".png";
+    } else if (type.startsWith("pycpt_")) {
+      var season  = document.getElementById("fcstselectseason").value.trim();
+      var varName = seasonalVars[varVal];
+      if (!varName) return null;
+      var product = pycptProductMap[type];
+      if (!product) return null;
+      return "images/" + resolvedDate + "/seasonal_pycpt/" + product + "/" + region + "/" +
+             "NMME_" + resolvedDate + "_" + region + "_" + season + "_" + varName + "_" + product + ".png";
     } else {
       var season  = document.getElementById("fcstselectseason").value.trim();
       var varName = seasonalVars[varVal];
