@@ -322,7 +322,7 @@ def _run_season(
     print("Y coords:", list(Y_v10.coords))
     print("Y dtype:", Y_v10.dtype)
 
-    if args.dry_run:
+    if dry_run:
         print("[DRY-RUN] CPT inputs built successfully. Skipping CPT execution.")
         print("[DRY-RUN] X_train_v10 dims:", X_train_v10.dims)
         print("[DRY-RUN] Y_v10 dims:", Y_v10.dims)
