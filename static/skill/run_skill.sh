@@ -33,7 +33,8 @@ for var in prec tref; do
         ${obs_arg} \
         --outdir "${OUTDIR}" \
         --start-year 1991 \
-        --end-year 2020
+        --end-year 2020 \
+        --overwrite
 done
 
 echo ""

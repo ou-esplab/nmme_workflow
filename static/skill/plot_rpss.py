@@ -28,10 +28,14 @@ import cartopy.feature as cfeature
 SKILLDIR_DEFAULT = "/data/esplab/shared/model/initialized/nmme/skill/1991-2020"
 OUTDIR_DEFAULT   = "/data/esplab/shared/model/initialized/nmme/skill/1991-2020/plots"
 
-MONTH_NAMES = [
-    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-]
+MONTH_ABBR = list("JFMAMJJASOND")   # 0-indexed
+
+
+def _season_label(init_month: int, season_start_lead: int, n: int = 3) -> str:
+    return "".join(
+        MONTH_ABBR[(init_month - 1 + l) % 12]
+        for l in range(season_start_lead, season_start_lead + n)
+    )
 
 # Latitude extent per variable (matches obs data coverage)
 VAR_LAT_EXTENT = {
@@ -56,10 +60,6 @@ VMIN   = -0.3
 VMAX   =  0.3
 CMAP   = "RdBu_r"
 NORM   = TwoSlopeNorm(vmin=VMIN, vcenter=0.0, vmax=VMAX)
-
-
-def _valid_month(init_month: int, lead: int) -> int:
-    return ((init_month - 1 + lead) % 12) + 1
 
 
 def _to_180(da: xr.DataArray) -> xr.DataArray:
@@ -108,8 +108,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--var",        required=True, choices=["prec", "tref"])
     p.add_argument("--init-month", required=True, type=int, choices=range(1, 13),
                    metavar="1-12")
-    p.add_argument("--lead",       required=True, type=int, choices=range(1, 10),
-                   metavar="1-9")
+    p.add_argument("--season-lead", required=True, type=int, choices=range(1, 8),
+                   metavar="1-7", dest="season_lead",
+                   help="First lead of the 3-month season (1=leads 1-3, 7=leads 7-9)")
     p.add_argument("--skilldir",   default=SKILLDIR_DEFAULT)
     p.add_argument("--outdir",     default=OUTDIR_DEFAULT)
     p.add_argument("--models",     default="ALL",
@@ -151,10 +152,10 @@ def main() -> int:
         if args.init_month not in da["init_month"].values:
             print(f"[SKIP] {model}: init_month={args.init_month} not in file")
             continue
-        if args.lead not in da["lead"].values:
-            print(f"[SKIP] {model}: lead={args.lead} not in file")
+        if args.season_lead not in da["season_lead"].values:
+            print(f"[SKIP] {model}: season_lead={args.season_lead} not in file")
             continue
-        slice2d = da.sel(init_month=args.init_month, lead=args.lead).squeeze()
+        slice2d = da.sel(init_month=args.init_month, season_lead=args.season_lead).squeeze()
         panels.append((model, slice2d))
 
     if not panels:
@@ -165,13 +166,12 @@ def main() -> int:
     ncols = 3
     nrows = (n + ncols - 1) // ncols
 
-    valid_mon   = _valid_month(args.init_month, args.lead)
-    var_label   = "Precipitation" if args.var == "prec" else "2m Temperature"
-    suptitle    = (
+    season_lbl = _season_label(args.init_month, args.season_lead)
+    var_label  = "Precipitation" if args.var == "prec" else "2m Temperature"
+    suptitle   = (
         f"RPSS  |  {var_label}  |  "
-        f"Init: {MONTH_NAMES[args.init_month]}  "
-        f"Lead: {args.lead}  "
-        f"Valid: {MONTH_NAMES[valid_mon]}"
+        f"Init: {MONTH_ABBR[args.init_month - 1]}  "
+        f"Season: {season_lbl}"
     )
 
     proj = ccrs.Robinson()
@@ -208,7 +208,7 @@ def main() -> int:
         cbar.ax.tick_params(labelsize=8)
 
     outname = (
-        f"rpss_{args.var}_init{args.init_month:02d}_lead{args.lead:02d}.png"
+        f"rpss_{args.var}_init{args.init_month:02d}_{season_lbl}.png"
     )
     outpath = outdir / outname
     fig.savefig(outpath, dpi=150, bbox_inches="tight")
