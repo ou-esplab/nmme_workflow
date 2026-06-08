@@ -163,6 +163,7 @@ pipeline:
     ssh_key: ~/.ssh/id_ed25519
     copy_static_once: true
     copy_static_force: false
+    copy_html_force: false
     static_climatology_source: /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020
     static_terciles_source: /data/esplab/shared/model/initialized/nmme/terciles/1991-2020
     hindcasts_dest_dir: /data/web/kpegion/http/nmme/hindcasts_test
