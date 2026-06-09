@@ -243,8 +243,11 @@ def open_netcdf_variable(path_glob: Path, var: str) -> xr.DataArray:
             f"(vars={list(ds.data_vars)})"
         )
 
-    # Return DataArray with standardized spatial dims (no time guessing)
-    return _rename_to_cpt_dims(ds[var])
+    da = _rename_to_cpt_dims(ds[var])
+    # Normalize longitudes to -180/180 if data is on 0-360 grid
+    if "X" in da.coords and float(da["X"].max()) > 180:
+        da = da.assign_coords(X=(da["X"] + 180) % 360 - 180).sortby("X")
+    return da
 
 
 
@@ -304,7 +307,7 @@ def load_model_local_with_patterns(
     yyyy, mm = _yyyymm_parts(init_yyyymm)
 
     hind_glob = _format_pattern(
-        patterns["hindcast"], root=root, model=model_base, var=var, yyyy=None, mm=None
+        patterns["hindcast"], root=root, model=model_base, var=var, yyyy=None, mm=mm
     )
     fore_glob = _format_pattern(
         patterns["forecast"], root=root, model=model_base, var=var, yyyy=yyyy, mm=mm
@@ -606,6 +609,156 @@ def season_to_months(season: str):
 
     raise ValueError(f"Unknown season '{season}'")
     
+
+def aggregate_predictand_to_season(
+    Y: xr.DataArray,
+    season: str,
+    hindcast_years,
+) -> xr.DataArray:
+    """
+    Aggregate observations to seasonal means aligned with hindcast years.
+
+    Returns raw seasonal means (not anomalies) with dims (S, Y, X).
+    Pass to CPT with tailoring='Anomaly' so CPT computes anomalies internally.
+    """
+    if "T" not in Y.dims:
+        raise ValueError("Predictand must have dimension 'T' (time).")
+    if not hasattr(Y["T"], "dt"):
+        raise ValueError("Predictand time coordinate must be datetime-like.")
+
+    hindcast_years = np.asarray(hindcast_years).astype(int)
+    season_months = season_to_months(season)
+
+    Y_season = Y.where(Y["T"].dt.month.isin(season_months), drop=True)
+    if Y_season.sizes.get("T", 0) == 0:
+        raise ValueError(f"No data found for season {season}")
+
+    Y_seasonal = Y_season.groupby("T.year").mean("T")
+
+    available_years = Y_seasonal["year"].values.astype(int)
+    common_years = np.intersect1d(available_years, hindcast_years)
+    if common_years.size == 0:
+        raise ValueError(
+            f"No overlapping years between predictand ({available_years.min()}–{available_years.max()}) "
+            f"and hindcasts ({hindcast_years.min()}–{hindcast_years.max()})"
+        )
+
+    Y_aligned = Y_seasonal.sel(year=common_years)
+    return Y_aligned.rename({"year": "S"}).transpose("S", "Y", "X")
+
+
+def prepare_forecast_predictor_v10(
+    fc_list: list,
+    model_names: list,
+    fcst_year: int = 2000,
+) -> xr.DataArray:
+    """
+    Assemble per-model forecast ensemble means into a CPTv10-formatted array.
+
+    Returns DataArray with dims (T=1, M, Y, X) and numeric M index.
+    """
+    squeezed = []
+    for da in fc_list:
+        for dim in ("S", "T", "time", "init"):
+            if dim in da.dims:
+                da = da.squeeze(dim, drop=True)
+        squeezed.append(da)
+
+    X_fcst = xr.concat(squeezed, dim="M").assign_coords(M=model_names)
+    fcst_dt = np.array([f"{fcst_year}-01-01"], dtype="datetime64[ns]")
+    X_fcst = X_fcst.expand_dims("T").assign_coords(T=fcst_dt)
+    X_fcst = X_fcst.transpose("T", "M", "Y", "X")
+    X_fcst = X_fcst.assign_coords(M=("M", np.arange(1, X_fcst.sizes["M"] + 1)))
+    X_fcst.attrs["M_names"] = model_names
+    X_fcst.attrs["missing"] = -9999.0
+    X_fcst.attrs["units"] = "unknown"
+    return X_fcst
+
+
+def _set_pycpt_attrs(ds, var, lev, fcstdate, season, region, kind):
+    from datetime import date as _date
+    ds.attrs["title"] = f"NMME PyCPT MOS {kind} forecast"
+    ds.attrs["var"] = var
+    ds.attrs["level"] = lev
+    ds.attrs["fcst_date"] = fcstdate
+    ds.attrs["target_season"] = season
+    ds.attrs["region"] = region
+    ds.attrs["units"] = "mm/day" if var == "prec" else "degC" if var in ("tref", "sst") else "unknown"
+    ds.attrs["source"] = "nmme_workflow pycpt"
+    ds.attrs["institution"] = "U. Oklahoma, School of Meteorology"
+    ds.attrs["CreationDate"] = str(_date.today())
+
+
+def save_pycpt_results(
+    results: dict,
+    region_name: str,
+    season: str,
+    var: str,
+    lev: str,
+    fcstdate: str,
+    output_root: str,
+) -> None:
+    """
+    Write pycpt CCA results to NetCDF files.
+
+    results : dict mapping model name → xr.Dataset with 'deterministic' and
+              'probabilistic' variables (as returned by canonical_correlation_analysis).
+    """
+    import os as _os
+    safe_season = season.replace("-", "")
+    outdir = _os.path.join(output_root, fcstdate, region_name, safe_season, "data")
+    _os.makedirs(outdir, exist_ok=True)
+
+    det_vars: dict = {}
+    prob_vars: dict = {}
+
+    for model, fcst in results.items():
+        safe_model = model.replace(".", "_").replace("-", "_")
+
+        det = fcst["deterministic"]
+        if "T" in det.dims:
+            det = det.isel(T=0)
+        rename = {}
+        if "Y" in det.dims: rename["Y"] = "lat"
+        if "X" in det.dims: rename["X"] = "lon"
+        if rename:
+            det = det.rename(rename)
+        det.attrs["long_name"] = f"{model} MOS deterministic anomaly"
+        det_vars[safe_model] = det
+
+        prob = fcst["probabilistic"]
+        if "T" in prob.dims:
+            prob = prob.isel(T=0)
+        if "C" in prob.dims:
+            prob = prob.rename({"C": "cat"}).assign_coords(cat=["bn", "nn", "an"])
+        rename = {}
+        if "Y" in prob.dims: rename["Y"] = "lat"
+        if "X" in prob.dims: rename["X"] = "lon"
+        if rename:
+            prob = prob.rename(rename)
+        if float(prob.max()) <= 1.01:
+            prob = prob * 100.0
+        prob.attrs["long_name"] = f"{model} MOS tercile probabilities (%)"
+        prob_vars[safe_model] = prob
+
+    ds_det = xr.Dataset(det_vars)
+    _set_pycpt_attrs(ds_det, var, lev, fcstdate, season, region_name, "deterministic")
+    det_path = _os.path.join(
+        outdir,
+        f"NMME_fcst_{fcstdate}.pycpt.det.anom.{var}_{lev}.{region_name}.{safe_season}.nc",
+    )
+    ds_det.to_netcdf(det_path)
+    print(f"[SAVED] {det_path}")
+
+    ds_prob = xr.Dataset(prob_vars)
+    _set_pycpt_attrs(ds_prob, var, lev, fcstdate, season, region_name, "probabilistic")
+    prob_path = _os.path.join(
+        outdir,
+        f"NMME_fcst_{fcstdate}.pycpt.prob.{var}_{lev}.{region_name}.{safe_season}.nc",
+    )
+    ds_prob.to_netcdf(prob_path)
+    print(f"[SAVED] {prob_path}")
+
 
 def run_deterministic_cca_only(
     X_train_v10,

@@ -116,10 +116,15 @@ data:
 
     path_patterns:
       # Hindcasts live across many years -> use wildcards for yyyy/mm
-      hindcast: "{root}/{model}/hindcast/{var}/{var}_{model}_????_??.nc"
+      hindcast: "{root}/{model}/hindcast/{var}/{var}_{model}_????_{mm}.nc"
 
       # Forecast lives for one init -> keep date-specific pattern
       forecast: "{root}/{model}/forecast/{var}/{var}_{model}_{yyyy}_{mm}.nc"
+
+    model_path_patterns:
+      # NOAA-SFS uses "reforecast" instead of "hindcast"
+      NOAA-SFS:
+        hindcast: "{root}/{model}/reforecast/{var}/{var}_{model}_????_{mm}.nc"
 
   # Output locations
   output:
