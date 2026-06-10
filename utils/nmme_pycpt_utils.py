@@ -172,6 +172,18 @@ def _rename_to_cpt_dims(da: xr.DataArray | xr.Dataset) -> xr.DataArray:
         if tim in da.coords or tim in da.dims:
             rename[tim] = "T"
             break
+    for init in ("init", "S"):
+        if init in da.coords or init in da.dims:
+            rename[init] = "S"
+            break
+    for lead in ("lead", "L"):
+        if lead in da.coords or lead in da.dims:
+            rename[lead] = "L"
+            break
+    for mem in ("member", "M"):
+        if mem in da.coords or mem in da.dims:
+            rename[mem] = "M"
+            break
 
     if rename:
         da = da.rename(rename)
@@ -219,17 +231,37 @@ def open_netcdf_variable(path_glob: Path, var: str) -> xr.DataArray:
             f"skipped={len(skipped_files)}"
         )
 
-    # Always open safely first
-    ds = (
-        xr.open_mfdataset(
-            valid_files,
-            combine="by_coords",
-            decode_times=False,
-            engine="netcdf4",
-        )
-        if len(valid_files) > 1
-        else xr.open_dataset(valid_files[0], decode_times=False, engine="netcdf4")
-    )
+    if len(valid_files) == 1:
+        ds = xr.open_dataset(valid_files[0], decode_times=False, engine="netcdf4")
+    else:
+        try:
+            ds = xr.open_mfdataset(
+                valid_files,
+                combine="by_coords",
+                decode_times=False,
+                engine="netcdf4",
+            )
+        except ValueError:
+            # Files have duplicate/non-unique coordinates (e.g. NOAA-SFS reforecast
+            # where init=0 in every file). Load individually and assign S from filename.
+            ds_list = []
+            for fp in valid_files:
+                d = xr.open_dataset(fp, decode_times=False, engine="netcdf4")
+                # Infer init year from filename: {var}_{model}_{YYYY}_{MM}.nc
+                try:
+                    yyyy = int(fp.stem.rsplit("_", 2)[-2])
+                except (ValueError, IndexError):
+                    yyyy = None
+                for init_dim in ("init", "S", "T"):
+                    if init_dim in d.dims and yyyy is not None:
+                        d = d.assign_coords({init_dim: [yyyy]})
+                        break
+                ds_list.append(d)
+            concat_dim = next(
+                (dim for dim in ("init", "S", "T") if dim in ds_list[0].dims),
+                "S",
+            )
+            ds = xr.concat(ds_list, dim=concat_dim)
 
     # Decode CF time *explicitly* and *only* for valid time coords
     if "T" in ds.coords:
