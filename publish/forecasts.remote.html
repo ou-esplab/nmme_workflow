@@ -24,6 +24,7 @@
     <label for="fcstselecttype">Forecast Type&nbsp;</label>
     <select class="form-control" id="fcstselecttype" onchange="onTypeChange()">
      <option value="monthly">Monthly Anomalies</option>
+     <option value="seasonal_anomalies">Seasonal Anomalies</option>
      <option value="tercile_probs">Seasonal Tercile Probabilities</option>
      <option value="cpt_dominant">Combined Tercile Probabilities</option>
      <option value="pycpt_anomalies">Monthly Anomalies: PyCPT</option>
@@ -184,7 +185,14 @@
     "SST":     { varPrefix: "SST",    regions: ["Global"] }
   };
 
-  // Seasonal: variable -> varName
+  // Seasonal anomalies (raw model rolling 3-month means): variable -> { varPrefix, regions[] }
+  var seasonalAnomalyVars = {
+    "2m Temp": { varPrefix: "2mTemp", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "Precip":  { varPrefix: "Precip", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "SST":     { varPrefix: "SST",    regions: ["Global"] }
+  };
+
+  // Seasonal tercile products: variable -> varName
   var seasonalVars = {
     "Precipitation": "prec",
     "Temperature":   "tref"
@@ -192,6 +200,9 @@
 
   var seasonalRegions = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
   var pycptRegions    = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
+
+  var seasonMonthOptions   = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var seasonTercileOptions = ["MAM","AMJ","MJJ","JJA","ASO","NDJ","Apr-Jul","Apr-Sep","Oct-Jan"];
 
   function populateSelect(id, options) {
     var sel = document.getElementById(id);
@@ -208,7 +219,14 @@
     var isMonthly = (type === "monthly");
     document.getElementById("lead-group").style.display   = isMonthly ? "" : "none";
     document.getElementById("season-group").style.display = isMonthly ? "none" : "";
-    populateSelect("fcstselectvar", isMonthly ? Object.keys(monthlyVars) : Object.keys(seasonalVars));
+    if (!isMonthly) {
+      populateSelect("fcstselectseason",
+        type === "seasonal_anomalies" ? seasonMonthOptions : seasonTercileOptions);
+    }
+    var varKeys = isMonthly ? Object.keys(monthlyVars) :
+                  (type === "seasonal_anomalies") ? Object.keys(seasonalAnomalyVars) :
+                  Object.keys(seasonalVars);
+    populateSelect("fcstselectvar", varKeys);
     onVarChange();
   }
 
@@ -217,6 +235,9 @@
     var varVal = document.getElementById("fcstselectvar").value;
     if (type === "monthly") {
       var regions = (monthlyVars[varVal] || monthlyVars["Precip"]).regions;
+      populateSelect("fcstselectregion", regions);
+    } else if (type === "seasonal_anomalies") {
+      var regions = (seasonalAnomalyVars[varVal] || seasonalAnomalyVars["Precip"]).regions;
       populateSelect("fcstselectregion", regions);
     } else if (type.startsWith("pycpt_")) {
       populateSelect("fcstselectregion", pycptRegions);
@@ -255,6 +276,12 @@
       if (!cfg) return null;
       return "images/" + resolvedDate + "/monthly/" + region + "/" +
              cfg.varPrefix + region + "Month" + leadNum + ".png";
+    } else if (type === "seasonal_anomalies") {
+      var season = document.getElementById("fcstselectseason").value.trim();
+      var cfg = seasonalAnomalyVars[varVal];
+      if (!cfg) return null;
+      return "images/" + resolvedDate + "/seasonal_anomalies/" + region + "/" +
+             cfg.varPrefix + region + "Season" + season + ".png";
     } else if (type.startsWith("pycpt_")) {
       var season  = document.getElementById("fcstselectseason").value.trim();
       var varName = seasonalVars[varVal];

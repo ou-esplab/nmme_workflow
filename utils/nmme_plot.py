@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -361,3 +362,80 @@ def _plot_variable_for_region(
         print(f"Writing figure: {out}")
         fig.savefig(out, dpi=100)
         plt.close(fig)
+
+
+def nmme_plot_seasonal(seas_dir, figpath, fcstdate, land_mask_path=None):
+    """Generate seasonal anomaly maps from existing seasonal NetCDF files."""
+    var_params_dict, reg_params_dict = initPlotParams()
+    land_mask = _load_land_mask(land_mask_path)
+    data_crs = ccrs.PlateCarree()
+    seas_dir = Path(seas_dir)
+
+    for var_params in var_params_dict:
+        v = var_params["name"]
+        fname = seas_dir / f"NMME_fcst_{fcstdate}.anom.seas.{v}_{var_params['plev']}.emean.nc"
+        if not fname.exists():
+            print(f"[WARN] Seasonal file not found: {fname}")
+            continue
+
+        ds_seas = xr.open_dataset(fname)
+        clevs, norm, ticks = _balanced_levels_and_ticks(var_params)
+        models_ordered = [m for m in PREFERRED_MODEL_ORDER if m in ds_seas.data_vars]
+        model_plot_locs = {m: i for i, m in enumerate(models_ordered[:9])}
+
+        for k in range(ds_seas.sizes["season_window"]):
+            season_label = str(ds_seas["season"].values[k])
+
+            for reg_name in var_params["regions"]:
+                reg = next(r for r in reg_params_dict if r["name"] == reg_name)
+                proj = _proj_from_region(reg)
+
+                lon_span = abs(reg["lons"][1] - reg["lons"][0])
+                lat_span = abs(reg["lats"][1] - reg["lats"][0])
+                aspect = lon_span / max(lat_span, 1)
+                fig_h = 8.5 if aspect <= 2.0 else min(11.0, 8.5 * (aspect / 2.0))
+
+                fig, axs = plt.subplots(
+                    3, 3, figsize=(11, fig_h),
+                    subplot_kw={"projection": proj},
+                    constrained_layout=True,
+                )
+                fig.set_constrained_layout_pads(hspace=0.12)
+                axs_flat = axs.flatten()
+                for i, ax in enumerate(axs_flat):
+                    ax.set_visible(i in model_plot_locs.values())
+
+                mappable = None
+                for model, iplot in model_plot_locs.items():
+                    da = ds_seas.isel(season_window=k)[model]
+                    ds_single = da.rename(f"{v}_ensmean").to_dataset()
+                    m = _plot_single_panel(
+                        axs_flat[iplot], ds_single, v,
+                        var_params["scale_factor"], clevs, var_params["cmap"], norm,
+                        model, reg["mproj"], reg["lons"], reg["lats"],
+                        reg["state_colors"], data_crs, land_mask=land_mask,
+                    )
+                    if m is not None:
+                        mappable = m
+
+                fig.suptitle(
+                    f"NMME {season_label} 3-Month Mean {var_params['label']} "
+                    f"Anomalies ({var_params['units']}): {fcstdate}",
+                    fontsize=12,
+                )
+                if mappable is not None:
+                    fig.colorbar(
+                        mappable,
+                        ax=[axs_flat[i] for i in model_plot_locs.values()],
+                        orientation="horizontal", fraction=0.04, pad=0.04,
+                        ticks=ticks, label=var_params["units"],
+                    )
+
+                out_dir = Path(figpath) / "seasonal" / reg_name
+                os.makedirs(out_dir, exist_ok=True)
+                out = out_dir / f"{var_params['outname']}{reg_name}Season{season_label}.png"
+                print(f"Writing figure: {out}")
+                fig.savefig(out, dpi=100)
+                plt.close(fig)
+
+        ds_seas.close()

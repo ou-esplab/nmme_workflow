@@ -174,6 +174,7 @@ _mkdir_dirs=(
 for _region in "${REGIONS[@]}"; do
   _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/${_region}")
   _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_region}")
+  _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/${_region}")
   for _product in threshold_maps most_likely cpt_dominant seasonal_total_summary; do
     _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_product}/${_region}")
   done
@@ -181,6 +182,8 @@ for _region in "${REGIONS[@]}"; do
     _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_pycpt/${_product}/${_region}")
   done
 done
+_mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/Global")
+_mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/NorthAmerica")
 
 _mkdir_cmd="mkdir -p"
 for _d in "${_mkdir_dirs[@]}"; do
@@ -233,6 +236,17 @@ if [[ "$PUBLISH_COPY_SEASONAL" == "1" ]]; then
       fi
     done
   done
+
+  # Copy raw seasonal anomaly maps (rolling 3-month means, all regions)
+  if [[ -d "${sourceDir}/images/anomalies/seasonal" ]]; then
+    for _region in Global NorthAmerica "${REGIONS[@]}"; do
+      if [[ -d "${sourceDir}/images/anomalies/seasonal/${_region}" ]]; then
+        run_cmd scp -i "${ssh_key_expanded}" \
+          "${sourceDir}/images/anomalies/seasonal/${_region}/"* \
+          "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/${_region}/" 2>/dev/null || true
+      fi
+    done
+  fi
 fi
 
 if [[ "$PUBLISH_COPY_PYCPT" == "1" ]]; then
