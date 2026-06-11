@@ -201,7 +201,11 @@
   var seasonalRegions = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
   var pycptRegions    = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
 
-  var seasonMonthOptions   = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var _mos = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var seasonMonthOptions = _mos.map(function(m) {
+    var end = _mos[(_mos.indexOf(m) + 2) % 12];
+    return { value: m, text: m + "-" + end };
+  });
   var seasonTercileOptions = ["MAM","AMJ","MJJ","JJA","ASO","NDJ","Apr-Jul","Apr-Sep","Oct-Jan"];
 
   function populateSelect(id, options) {
@@ -209,7 +213,8 @@
     sel.innerHTML = "";
     options.forEach(function(o) {
       var opt = document.createElement("option");
-      opt.text = o; opt.value = o;
+      if (typeof o === "object") { opt.value = o.value; opt.text = o.text; }
+      else { opt.text = o; opt.value = o; }
       sel.add(opt);
     });
   }
