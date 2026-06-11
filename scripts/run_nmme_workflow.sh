@@ -24,8 +24,8 @@ Usage: ./scripts/run_nmme_workflow.sh [OPTIONS]
 OPTIONS:
   --init YYYYMM              Forecast init date (required for regular runs)
   --stages STAGE [STAGE...]  Stages to run (default: ingest preprocess products pycpt)
-                             Static (one-time): climatology, terciles
-                             Main: ingest, preprocess, products, pycpt, publish
+                             Static one-time (--init ignored): climatology, terciles, skill
+                             Main (--init required): ingest, preprocess, products, pycpt, publish
                              Sector: ship-routing-products
   --publish                  Include publish stage
   --publish-dry-run          Publish without SSH/SCP side effects
