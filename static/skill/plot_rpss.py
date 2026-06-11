@@ -28,7 +28,9 @@ import cartopy.feature as cfeature
 SKILLDIR_DEFAULT = "/data/esplab/shared/model/initialized/nmme/skill/1991-2020"
 OUTDIR_DEFAULT   = "/data/esplab/shared/model/initialized/nmme/skill/1991-2020/plots"
 
-MONTH_ABBR = list("JFMAMJJASOND")   # 0-indexed
+MONTH_ABBR  = list("JFMAMJJASOND")   # 0-indexed, used for season labels
+MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun",
+               "Jul","Aug","Sep","Oct","Nov","Dec"]
 
 
 def _season_label(init_month: int, season_start_lead: int, n: int = 3) -> str:
@@ -170,7 +172,7 @@ def main() -> int:
     var_label  = "Precipitation" if args.var == "prec" else "2m Temperature"
     suptitle   = (
         f"RPSS  |  {var_label}  |  "
-        f"Init: {MONTH_ABBR[args.init_month - 1]}  "
+        f"Init: {MONTH_NAMES[args.init_month - 1]}  "
         f"Season: {season_lbl}"
     )
 
