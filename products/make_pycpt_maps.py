@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.config import load_config
 from utils.paths import ensure_dir
+from utils.nmme_plot_params import initPlotParams
 from products.make_tercile_probability_maps import (
     plot_probabilities,
     plot_most_likely_from_prob,
@@ -84,16 +85,14 @@ def _model_label(var_name: str) -> str:
     return f"{label}\n({nens} ens)" if nens else label
 
 
-def _symmetric_levels(det_ds: xr.Dataset, n: int = 13) -> np.ndarray:
-    """Auto-scaled symmetric levels centered on 0 based on 98th-pct of abs values."""
-    all_vals = np.concatenate([
-        det_ds[v].values.ravel() for v in det_ds.data_vars
-    ])
-    abs_max = float(np.nanpercentile(np.abs(all_vals), 98))
-    abs_max = max(abs_max, 0.01)
-    # Round up to nearest 0.25
-    abs_max = float(np.ceil(abs_max * 4) / 4)
-    return np.linspace(-abs_max, abs_max, n)
+def _clevs_for_var(var: str) -> np.ndarray:
+    """Return fixed contour levels matching the raw NMME anomaly maps."""
+    var_params_dict, _ = initPlotParams()
+    for vp in var_params_dict:
+        if vp["name"] == var:
+            return np.asarray(vp["clevs"], float)
+    # fallback: symmetric 13-level scale ±2
+    return np.linspace(-2, 2, 13)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +152,7 @@ def plot_pycpt_anomalies(
     if "MME" in present:
         ordered.append("MME")
 
-    levels = _symmetric_levels(det_ds)
+    levels = _clevs_for_var(var)
     norm = TwoSlopeNorm(vmin=levels[0], vcenter=0.0, vmax=levels[-1])
 
     ncols = 3

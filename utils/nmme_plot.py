@@ -383,8 +383,12 @@ def nmme_plot_seasonal(seas_dir, figpath, fcstdate, land_mask_path=None):
         models_ordered = [m for m in PREFERRED_MODEL_ORDER if m in ds_seas.data_vars]
         model_plot_locs = {m: i for i, m in enumerate(models_ordered[:9])}
 
+        _month_abbrevs = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
         for k in range(ds_seas.sizes["season_window"]):
             season_label = str(ds_seas["season"].values[k])
+            end_label = _month_abbrevs[(_month_abbrevs.index(season_label) + 2) % 12]
+            season_range = f"{season_label}-{end_label}"
 
             for reg_name in var_params["regions"]:
                 reg = next(r for r in reg_params_dict if r["name"] == reg_name)
@@ -419,8 +423,8 @@ def nmme_plot_seasonal(seas_dir, figpath, fcstdate, land_mask_path=None):
                         mappable = m
 
                 fig.suptitle(
-                    f"NMME {season_label} 3-Month Mean {var_params['label']} "
-                    f"Anomalies ({var_params['units']}): {fcstdate}",
+                    f"NMME Forecast {season_range} {var_params['label']} "
+                    f"Anomalies ({var_params['units']}): {k}-Month Lead  IC: {fcstdate}",
                     fontsize=12,
                 )
                 if mappable is not None:
