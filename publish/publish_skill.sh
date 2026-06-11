@@ -25,5 +25,9 @@ n_plots=$(ls "${SKILL_SRC}"/*.png 2>/dev/null | wc -l)
 echo "Syncing ${n_plots} PNG files..."
 scp -i "${ssh_key}" "${SKILL_SRC}"/*.png "${HOST}:${DEST_DIR}/skill/plots/"
 
+# Deploy skill.html
+SKILL_HTML="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/skill.html"
+scp -i "${ssh_key}" "${SKILL_HTML}" "${HOST}:${DEST_DIR}/skill.html"
+
 echo ""
-echo "Done. Skill plots deployed to ${HOST}:${DEST_DIR}/skill/plots/"
+echo "Done. Deployed to ${HOST}:${DEST_DIR}/skill/plots/ and ${DEST_DIR}/skill.html"
