@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.config import load_config
 from utils.paths import ensure_dir
-from utils.nmme_plot_params import initPlotParams
+from utils.nmme_plot import seasonal_clevs
 from products.make_tercile_probability_maps import (
     plot_probabilities,
     plot_most_likely_from_prob,
@@ -85,14 +85,6 @@ def _model_label(var_name: str) -> str:
     return f"{label}\n({nens} ens)" if nens else label
 
 
-def _clevs_for_var(var: str) -> np.ndarray:
-    """Return fixed contour levels matching the raw NMME anomaly maps."""
-    var_params_dict, _ = initPlotParams()
-    for vp in var_params_dict:
-        if vp["name"] == var:
-            return np.asarray(vp["clevs"], float)
-    # fallback: symmetric 13-level scale ±2
-    return np.linspace(-2, 2, 13)
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +134,7 @@ def plot_pycpt_anomalies(
     init_yyyymm: str,
     var: str,
     out_png: Path,
+    levels: "np.ndarray | None" = None,
 ) -> None:
     meta = ANOM_META.get(var, ANOM_META["tref"])
 
@@ -152,7 +145,8 @@ def plot_pycpt_anomalies(
     if "MME" in present:
         ordered.append("MME")
 
-    levels = _clevs_for_var(var)
+    if levels is None:
+        levels = np.linspace(-2, 2, 13)
     norm = TwoSlopeNorm(vmin=levels[0], vcenter=0.0, vmax=levels[-1])
 
     ncols = 3
@@ -202,6 +196,7 @@ def plot_pycpt_anomalies(
             orientation="horizontal",
             fraction=0.04,
             pad=0.04,
+            ticks=levels,
             label=meta["unit"],
         )
 
@@ -246,6 +241,22 @@ def main() -> int:
         print(f"[WARN] No pycpt output files found under {pycpt_root}/{init}/")
         return 0
 
+    # Pre-compute colourbar levels from raw seasonal NetCDF (one per var/lev)
+    var_clevs: dict[tuple, np.ndarray] = {}
+    for c in cases:
+        key = (c["var"], c["lev"])
+        if key not in var_clevs:
+            seas_nc = (fcst_root / init / "data" / "seasonal" /
+                       f"NMME_fcst_{init}.anom.seas.{c['var']}_{c['lev']}.emean.nc")
+            if seas_nc.exists():
+                ds_raw = xr.open_dataset(seas_nc)
+                var_clevs[key] = seasonal_clevs(ds_raw)
+                ds_raw.close()
+                print(f"[CLEVS] {key}: {var_clevs[key][0]:.2f} … {var_clevs[key][-1]:.2f}")
+            else:
+                print(f"[WARN] Raw seasonal NetCDF not found: {seas_nc}, using default clevs")
+                var_clevs[key] = np.linspace(-2, 2, 13)
+
     for c in cases:
         region, season, var = c["region"], c["season"], c["var"]
 
@@ -263,7 +274,8 @@ def main() -> int:
         # ----------------------------------------------------------------
         det_ds = xr.open_dataset(c["det_path"])
         out_anom = img_root / "anomalies" / region / f"{stem}_anomalies.png"
-        plot_pycpt_anomalies(det_ds, region, season, init, var, out_anom)
+        plot_pycpt_anomalies(det_ds, region, season, init, var, out_anom,
+                             levels=var_clevs.get((c["var"], c["lev"])))
         print(f"  [SAVED] {out_anom.name}")
         det_ds.close()
 

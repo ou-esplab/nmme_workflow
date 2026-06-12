@@ -364,6 +364,17 @@ def _plot_variable_for_region(
         plt.close(fig)
 
 
+def seasonal_clevs(ds_seas: "xr.Dataset") -> np.ndarray:
+    """Compute symmetric integer colorbar levels from 98th-pct of abs values in seasonal dataset."""
+    float_vars = [v for v in ds_seas.data_vars
+                  if np.issubdtype(ds_seas[v].dtype, np.floating)]
+    vals = np.concatenate([ds_seas[v].values.ravel() for v in float_vars])
+    vals = vals[np.isfinite(vals)]
+    abs_max = float(np.nanpercentile(np.abs(vals), 98)) if vals.size else 1.0
+    abs_max = max(int(np.ceil(abs_max)), 1)  # round up to integer, minimum 1
+    return np.arange(-abs_max, abs_max + 1, dtype=int)
+
+
 def nmme_plot_seasonal(seas_dir, figpath, fcstdate, land_mask_path=None):
     """Generate seasonal anomaly maps from existing seasonal NetCDF files."""
     var_params_dict, reg_params_dict = initPlotParams()
@@ -379,7 +390,9 @@ def nmme_plot_seasonal(seas_dir, figpath, fcstdate, land_mask_path=None):
             continue
 
         ds_seas = xr.open_dataset(fname)
-        clevs, norm, ticks = _balanced_levels_and_ticks(var_params)
+        clevs = seasonal_clevs(ds_seas)
+        norm = TwoSlopeNorm(vmin=clevs[0], vcenter=0.0, vmax=clevs[-1])
+        ticks = clevs
         models_ordered = [m for m in PREFERRED_MODEL_ORDER if m in ds_seas.data_vars]
         model_plot_locs = {m: i for i, m in enumerate(models_ordered[:9])}
 
