@@ -43,6 +43,13 @@ def _season_label(init_month: int, season_start_lead: int, n: int = 3) -> str:
 VAR_LAT_EXTENT = {
     "prec": (-50, 50),   # CHIRPS: 50S–50N
     "tref": (-90, 90),   # GHCN-CAMS: global land
+    "sst":  (-90, 90),   # ERSSTv5: global ocean
+}
+
+VAR_LABEL = {
+    "prec": "Precipitation",
+    "tref": "2m Temperature",
+    "sst":  "SST",
 }
 
 PREFERRED_ORDER = [
@@ -107,7 +114,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Plot RPSS skill maps for NMME hindcasts."
     )
-    p.add_argument("--var",        required=True, choices=["prec", "tref"])
+    p.add_argument("--var",        required=True, choices=["prec", "tref", "sst"])
     p.add_argument("--init-month", required=True, type=int, choices=range(1, 13),
                    metavar="1-12")
     p.add_argument("--season-lead", required=True, type=int, choices=range(1, 8),
@@ -169,7 +176,7 @@ def main() -> int:
     nrows = (n + ncols - 1) // ncols
 
     season_lbl = _season_label(args.init_month, args.season_lead)
-    var_label  = "Precipitation" if args.var == "prec" else "2m Temperature"
+    var_label  = VAR_LABEL.get(args.var, args.var)
     suptitle   = (
         f"RPSS  |  {var_label}  |  "
         f"Init: {MONTH_NAMES[args.init_month - 1]}  "

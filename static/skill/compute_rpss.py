@@ -34,7 +34,7 @@ from utils.paths import ensure_dir
 # Constants
 # ---------------------------------------------------------------------------
 
-VAR_LEV = {"prec": "sfc", "tref": "2m"}
+VAR_LEV = {"prec": "sfc", "tref": "2m", "sst": "sfc"}
 SFS_MODELS = {"NOAA-SFS"}
 N_SEASON = 3                          # months per season
 MONTH_ABBR = list("JFMAMJJASOND")    # 0-indexed
@@ -93,10 +93,13 @@ def _decode_obs_time(ds: xr.Dataset) -> xr.Dataset:
         return ds
 
 
-def _obs_monthly_da(var: str, obs_precip: str, obs_tref: str) -> xr.DataArray:
+def _obs_monthly_da(var: str, obs_precip: str, obs_tref: str, obs_sst: str = "") -> xr.DataArray:
     if var == "prec":
         ds = _decode_obs_time(xr.open_dataset(obs_precip))
         da = ds["precip"].where(ds["precip"] > -9000)
+    elif var == "sst":
+        ds = _decode_obs_time(xr.open_dataset(obs_sst))
+        da = ds["sst"].where(ds["sst"] < 1e10)
     else:
         ds = _decode_obs_time(xr.open_dataset(obs_tref))
         da = ds["air"]
@@ -522,11 +525,12 @@ def parse_args() -> argparse.Namespace:
         description="Compute seasonal RPSS skill for NMME hindcasts (3-month seasons)."
     )
     p.add_argument("--config", default="confignmme.yaml")
-    p.add_argument("--var", required=True, choices=["prec", "tref"])
+    p.add_argument("--var", required=True, choices=["prec", "tref", "sst"])
     p.add_argument("--hindcast-root", required=True)
     p.add_argument("--clim-root",     required=True)
     p.add_argument("--obs-precip", default=None)
     p.add_argument("--obs-tref",   default=None)
+    p.add_argument("--obs-sst",    default=None)
     p.add_argument("--outdir",     required=True)
     p.add_argument("--start-year", type=int, default=1991)
     p.add_argument("--end-year",   type=int, default=2020)
@@ -551,12 +555,17 @@ def main() -> int:
         if not args.obs_precip:
             print("[ERROR] --obs-precip required for var=prec")
             return 1
-        obs_da = _obs_monthly_da(var, args.obs_precip, args.obs_precip)
+        obs_da = _obs_monthly_da(var, args.obs_precip, "", "")
+    elif var == "sst":
+        if not args.obs_sst:
+            print("[ERROR] --obs-sst required for var=sst")
+            return 1
+        obs_da = _obs_monthly_da(var, "", "", args.obs_sst)
     else:
         if not args.obs_tref:
             print("[ERROR] --obs-tref required for var=tref")
             return 1
-        obs_da = _obs_monthly_da(var, args.obs_tref, args.obs_tref)
+        obs_da = _obs_monthly_da(var, "", args.obs_tref, "")
 
     all_models = cfg["models"]
     requested  = set(args.models.split(",")) if args.models != "ALL" else {"ALL"}

@@ -12,15 +12,18 @@ OUTDIR="${OUTDIR:-/data/esplab/shared/model/initialized/nmme/skill/1991-2020}"
 
 OBS_PRECIP="/data/esplab/shared/obs/gridded/atm/precip/monthly/CHIRPSv2/chirps-v2.0.monthly.nc"
 OBS_TREF="/data/esplab/shared/obs/gridded/atm/temperature/monthly/air.mon.mean.nc"
+OBS_SST="/data/esplab/shared/obs/gridded/ocn/SST/monthly/NOAA-ERSSTv5/sst.mnmean.nc"
 
 echo "=== RPSS skill computation ==="
 echo "Output: ${OUTDIR}"
 
-for var in prec tref; do
+for var in prec tref sst; do
     echo ""
     echo "--- var=${var} ---"
     if [ "${var}" = "prec" ]; then
         obs_arg="--obs-precip ${OBS_PRECIP}"
+    elif [ "${var}" = "sst" ]; then
+        obs_arg="--obs-sst ${OBS_SST}"
     else
         obs_arg="--obs-tref ${OBS_TREF}"
     fi

@@ -10,7 +10,7 @@ set -euo pipefail
 PYTHON="${PYTHON:-python3}"
 SKILLDIR="${SKILLDIR:-/data/esplab/shared/model/initialized/nmme/skill/1991-2020}"
 OUTDIR="${OUTDIR:-${SKILLDIR}/plots}"
-VARS="${VARS:-prec}"      # space-separated: "prec tref" for both
+VARS="${VARS:-prec tref sst}"      # space-separated: "prec tref sst"
 
 echo "=== RPSS plot generation ==="
 echo "Skilldir: ${SKILLDIR}"
