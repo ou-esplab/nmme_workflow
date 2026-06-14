@@ -8,10 +8,9 @@ This README explains **how to run the full NMME seasonal forecast workflow** fro
 ## What This Workflow Does
 
 - Uses raw NMME hindcasts and forecasts
-- Generates standardized ensemble‑mean forecast products
-- Runs **deterministic CPT (CCA)** post‑processing
-
-Probabilistic CPT is intentionally deferred.
+- Generates standardized ensemble‑mean forecast products (anomaly maps, tercile probability maps, seasonal anomaly maps)
+- Runs **per-model CCA bias correction** (PyCPT) and generates bias-corrected regional forecast maps
+- Computes hindcast skill scores (RPSS, ACC) for model verification
 
 ---
 
@@ -93,9 +92,17 @@ python runners/cli.py --system nmme --config confignmme.yaml --init 202601
 ```
 
 This runs the full end-to-end pipeline: ingest, preprocess, products, pycpt.
-Default stages are: ingest, preprocess, products, pycpt.
-To include Arraylake, add it explicitly in `--stages arraylake`.
-To include publish, add it explicitly in `--stages publish`.
+Default stages are: `ingest`, `preprocess`, `products`, `pycpt`.
+
+Additional per-init stages (run explicitly):
+- `--stages pycpt_maps` — generate PyCPT bias-corrected regional forecast maps
+- `--stages arraylake` — append new init date to Arraylake
+- `--stages publish` — publish products to the website
+
+Static one-time stages (no `--init` needed):
+- `--stages climatology` — build model climatologies from reforecasts
+- `--stages terciles` — precompute tercile thresholds
+- `--stages skill` — compute RPSS and ACC hindcast skill scores (runs `static/skill/run_skill.sh`)
 
 ### SFS AWS Forecast Ingest (prec, tref, sst)
 
@@ -167,6 +174,12 @@ PyCPT dry-run (skips CPT execution):
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages pycpt --pycpt-dry-run
 ```
 
+PyCPT maps dry-run (builds inputs only; skips map writes):
+
+```bash
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages pycpt_maps --pycpt-dry-run
+```
+
 Products dry-run (does not write products):
 
 ```bash
@@ -201,18 +214,13 @@ No forecast application is performed yet.
 
 ## Current Capabilities
 
-✅ Deterministic CPT training
+✅ Per-model CCA bias correction (PyCPT) — training and forecast application
 ✅ Dynamic hindcast ensemble means
 ✅ Model‑by‑model handling with missing‑model tolerance
+✅ Bias-corrected regional forecast maps (`pycpt_maps`)
+✅ Seasonal anomaly maps for all regions
+✅ RPSS and ACC hindcast skill scores for prec, tref, and SST
 ✅ Optional Arraylake append stage
-
----
-
-## Deferred Capabilities
-
-- Probabilistic CPT (terciles)
-- Applying CPT model to forecasts
-- Writing CPT forecast output files
 
 ---
 
@@ -325,7 +333,7 @@ grep CRON /var/log/syslog | tail -20
 
 ## Preparing Static Files
 
-The NMME workflow requires two types of precomputed **static files** (climatology and tercile thresholds) before running the products stage. These are one-time setup files or periodic refreshes when data/models change.
+The NMME workflow requires three types of precomputed **static files** before running the products stage. These are one-time setup files or periodic refreshes when data/models change.
 
 ### Static Files Overview
 
@@ -336,6 +344,11 @@ The NMME workflow requires two types of precomputed **static files** (climatolog
 2. **Tercile Threshold Files**: Tercile percentiles (33rd, 66th) for tercile probability maps
    - Location: `tercile_thresholds/`
    - Naming: `{model}.{var}.{season}.terciles.1991-2020.nc`
+
+3. **Skill Score Files**: RPSS and ACC for each model/variable over 1991–2020
+   - Location: `/data/esplab/shared/model/initialized/nmme/skill/1991-2020/`
+   - Naming: `{model}.{var}.rpss.1991-2020.nc`, `{model}.{var}.acc.1991-2020.nc`
+   - Plots published to website `skill/plots/` directory
 
 ### Check Static Files Status
 
@@ -360,7 +373,10 @@ If static files are missing, generate them using the runner:
 # Step 2: Precompute tercile thresholds (~5-10 minutes)
 ./scripts/run_nmme_workflow.sh --stages terciles
 
-# Step 3: Verify completion
+# Step 3: Compute hindcast skill scores (long-running; use screen on esplab-0-2)
+bash static/skill/run_skill.sh
+
+# Step 4: Verify completion
 python scripts/check_static_files.py --config confignmme.yaml \
   --climatology-root /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020 \
   --tercile-root tercile_thresholds
@@ -483,22 +499,24 @@ Organize your hindcast and forecast data according to the path patterns in confi
 
 ### Step 5: Add to PyCPT Regions (Optional)
 
-If you want this model included in CPT post-processing, add it to the `pycpt_regions` in [confignmme.yaml](confignmme.yaml):
+If you want this model included in CPT post-processing, add it to the pycpt regions in [confignmme.yaml](confignmme.yaml).
+
+Available regions: CONUS, Mexico, Venezuela, Iran, C.Asia. Seasons use `Mon-Mon` format (e.g., `Feb-Apr`, `Jun-Aug`).
 
 ```yaml
-pycpt_regions:
-  - name: Mexico
-    lat: [20, 33]
-    lon: [-118, -97]
-    season: Feb-Apr
-    models:
-      - NASA-GEOSS2S
-      - CanESM5
-      - MyNewModel      # ← Add here
-      # ... other models
+pycpt:
+  regions:
+    - name: Mexico
+      lat: [20, 33]
+      lon: [-118, -97]
+      seasons: [Feb-Apr, Jun-Aug]
+      models:
+        - NASA-GEOSS2S
+        - CanESM5
+        - MyNewModel      # ← Add here
 ```
 
-Omit this step if the model should not participate in CPT training for this region.
+Omit this step if the model should not participate in CPT training for any region.
 
 ### Step 6: Test the Integration
 

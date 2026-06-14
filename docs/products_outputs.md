@@ -17,9 +17,9 @@ uses the local `arraylake/.env` token file when present.
 
 Products are available for:
 
-- **Variables:** Precipitation, 2-meter Temperature
+- **Variables:** Precipitation, 2-meter Temperature, SST
 - **Regions:** CONUS, Venezuela, Iran, Mexico, C.Asia
-- **Seasons:** MAM, AMJ, MJJ, JJA, ASO, NDJ (overlapping 3-month windows); Apr-Jul, Apr-Sep, Oct-Jan (multi-month windows)
+- **Seasons:** 3-month rolling windows (e.g., MAM, AMJ); displayed in `Mon-Mon` format in PyCPT outputs (e.g., `Mar-May`, `Apr-Jun`)
 - **Climatological baseline:** 1991–2020
 
 ---
@@ -104,7 +104,44 @@ forecast can translate to a strong BN or AN signal in some regions.
 
 ---
 
-### 6. Seasonal Total Precipitation Summary *(precipitation only)*
+### 6. Seasonal Anomaly Maps *(multi-panel per model)*
+
+**What it shows:** For each 3-month rolling seasonal window, a 3×3 panel grid showing the ensemble-mean anomaly forecast for each NMME model individually, allowing model-to-model comparison.
+
+**How to read it:** Same color scale as monthly anomaly maps. Each panel is labeled with the model name. An MME panel is included as the last panel.
+
+**Available for:** All variables (prec, tref, sst) and all regions. One map per season window per region per variable.
+
+---
+
+### 7. PyCPT Bias-Corrected Forecast Maps *(regional, per season)*
+
+**What it shows:** Bias-corrected deterministic forecast anomalies from per-model CCA (Canonical Correlation Analysis), averaged across models for an MME estimate. These remove systematic model errors via MOS training on 1991–2020 hindcasts.
+
+**How to read it:** Similar to raw anomaly maps but based on the CCA-corrected forecast. Typically shows more physically consistent spatial patterns than raw ensemble means.
+
+**Available for:** Configured pycpt regions (CONUS, Mexico, Venezuela, Iran, C.Asia) and seasons listed in `confignmme.yaml`.
+
+---
+
+### 8. Hindcast Skill Score Maps *(RPSS and ACC)*
+
+**What it shows:** Hindcast skill evaluated over 1991–2020. Two metrics available:
+
+| Metric | Description |
+|--------|-------------|
+| **RPSS** (Ranked Probability Skill Score) | Probabilistic skill relative to climatological forecast; positive = better than climatology |
+| **ACC** (Anomaly Correlation Coefficient) | Spatial correlation between forecast and observed anomalies |
+
+**How to read it:** For RPSS, values > 0 indicate skill; values near 0 or negative indicate little to no skill above climatology. For ACC, values near 1.0 are ideal; 0.3–0.5 is considered moderate skill.
+
+**Available for:** prec (CHIRPS obs), tref (GHCN-CAMS obs), sst (NOAA ERSSTv5). Individual models and MME, for each init month and forecast season.
+
+**Location on website:** `skill/plots/rpss_{var}_init{MM}_{season}.png`
+
+---
+
+### 9. Seasonal Total Precipitation Summary *(precipitation only)*
 
 **What it shows:** Absolute seasonal precipitation totals (mm/season) rather than anomalies.
 Three panels show: (1) the mean seasonal total, (2) the lower-tercile boundary (T33 — the
@@ -136,17 +173,23 @@ means in physical units for each region and season.
 Each season label is a 3-month window. Seasons are computed relative to the forecast
 initialization month, so available seasons shift slightly each month.
 
-| Label | Months |
-|-------|--------|
-| MAM | March – April – May |
-| AMJ | April – May – June |
-| MJJ | May – June – July |
-| JJA | June – July – August |
-| ASO | August – September – October |
-| NDJ | November – December – January |
-| Apr-Jul | April – May – June – July |
-| Apr-Sep | April – May – June – July – August – September |
-| Oct-Jan | October – November – December – January |
+Raw NMME products use 3-char season codes (MAM, JJA, etc.). PyCPT products use the
+`Mon-Mon` format (e.g., `Mar-May`, `Jun-Aug`) throughout config and outputs.
+
+| 3-char code | Mon-Mon format | Months |
+|-------------|----------------|--------|
+| DJF | Dec-Feb | December – January – February |
+| JFM | Jan-Mar | January – February – March |
+| FMA | Feb-Apr | February – March – April |
+| MAM | Mar-May | March – April – May |
+| AMJ | Apr-Jun | April – May – June |
+| MJJ | May-Jul | May – June – July |
+| JJA | Jun-Aug | June – July – August |
+| JAS | Jul-Sep | July – August – September |
+| ASO | Aug-Oct | August – September – October |
+| SON | Sep-Nov | September – October – November |
+| OND | Oct-Dec | October – November – December |
+| NDJ | Nov-Jan | November – December – January |
 
 ---
 
@@ -172,13 +215,16 @@ All images are located under `forecast/{YYYYMM}/images/`.
 | Product | Path | Filename pattern |
 |---------|------|-----------------|
 | Monthly anomaly | `anomalies/{Region}/` | `{Var}{Region}Month{N}.png` |
+| Seasonal anomaly (per model) | `anomalies/seasonal/{Region}/` | `{Var}{Region}Season{Mon}.png` |
 | Tercile probabilities | `tercile_probs/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_tercile_probs.png` |
 | Combined tercile (CPT-style) | `cpt_dominant/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_cpt_dominant.png` |
 | Most likely category | `most_likely/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_most_likely.png` |
 | Threshold maps | `threshold_maps/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_thresholds.png` |
 | Seasonal total summary | `seasonal_total_summary/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_seasonal_total_summary.png` |
+| PyCPT bias-corrected maps | `pycpt/{Region}/` | `{var}_{Region}_{Season}_{YYYYMM}_cca.png` |
+| Skill score maps (static) | `skill/plots/` | `rpss_{var}_init{MM}_{Season}.png`, `acc_{var}_init{MM}_{Season}.png` |
 
-Where `{var}` is `prec` or `tref`, `{N}` is the lead month number (0–8), and `{Var}` is `Precip`, `2mTemp`, or `SST`.
+Where `{var}` is `prec`, `tref`, or `sst`; `{N}` is the lead month number (0–8); `{Var}` is `Precip`, `2mTemp`, or `SST`; `{Mon}` is the 3-char season label (e.g., `Jun`, `Sep`); `{MM}` is the two-digit init month.
 
 ---
 

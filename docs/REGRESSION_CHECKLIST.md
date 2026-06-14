@@ -90,7 +90,40 @@ Expected:
 - runner runs default stages: `ingest`, `preprocess`, `products`, `pycpt`
 - no uncaught runner exception
 
-## 7. Arraylake Dry-Run (Optional)
+## 7. Runner Dry-Run: PyCPT Maps
+
+```bash
+python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages pycpt_maps --pycpt-dry-run
+```
+
+Expected:
+- command exits 0
+- inputs built and logged; no map files written
+
+## 8. Skill Static Stage (One-Time)
+
+To validate the skill computation scripts parse without error:
+
+```bash
+python static/skill/compute_rpss.py --help
+python static/skill/compute_acc.py --help
+```
+
+Expected: help text printed, no import errors.
+
+To run the full skill computation (long-running; requires large memory machine such as esplab-0-2):
+
+```bash
+# Use a screen session on esplab-0-2
+bash static/skill/run_skill.sh
+```
+
+Expected:
+- RPSS and ACC NetCDF files created under `/data/esplab/shared/model/initialized/nmme/skill/1991-2020/`
+- One file per model per variable per metric: `{model}.{var}.rpss.1991-2020.nc`, `{model}.{var}.acc.1991-2020.nc`
+- Plots written to `publish/skill/plots/`
+
+## 9. Arraylake Dry-Run (Optional)
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages arraylake --arraylake-dry-run
@@ -101,7 +134,7 @@ Expected:
 - Arraylake log is created under `logs/.../nmme/202601/`
 - no Arraylake write/commit side effects
 
-## 8. Publish Stage Dry-Run (Optional)
+## 10. Publish Stage Dry-Run (Optional)
 
 ```bash
 python runners/cli.py --system nmme --config confignmme.yaml --init 202601 --stages publish --publish-dry-run
@@ -111,7 +144,7 @@ Expected:
 - command exits 0
 - publish log generated without SSH/SCP side effects
 
-## 9. Log Review
+## 11. Log Review
 
 Check latest stage logs:
 

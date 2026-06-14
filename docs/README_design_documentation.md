@@ -14,13 +14,18 @@ Raw NMME Data
    ↓
 [02] Preprocess
    ↓
-[03] Forecast Products (ensemble‑mean anomalies)
+[03] Forecast Products (ensemble-mean anomalies, seasonal anomaly maps, tercile maps)
    ↓
-[04] Arraylake Append (optional)
+[04] PyCPT Post-Processing (per-model CCA bias correction)
    ↓
-[05] PyCPT Post‑Processing
+[05] PyCPT Maps (bias-corrected forecast maps per region)
    ↓
-[06] Publish (optional)
+[06] Arraylake Append (optional)
+   ↓
+[07] Publish (optional)
+
+Static / one-time stages (no --init required):
+  climatology  →  terciles  →  skill
 ```
 
 Primary entrypoint:
@@ -28,8 +33,10 @@ Primary entrypoint:
 - `python runners/cli.py --system nmme --config confignmme.yaml --init YYYYMM`
 
 - Default stages run: `ingest`, `preprocess`, `products`, `pycpt`.
+- `pycpt_maps` is run explicitly via `--stages pycpt_maps`.
 - `arraylake` is opt-in and run explicitly via `--stages arraylake`.
-- Publish is optional and run explicitly via `--stages ... publish`.
+- `publish` is optional and run explicitly via `--stages publish`.
+- `skill` is a static one-time stage; does not require `--init`.
 
 ---
 
@@ -39,6 +46,7 @@ Primary entrypoint:
 - Make all CPT assumptions explicit
 - Separate training from forecast application
 - Avoid CPT axis guessing
+- Per-model CCA (not pooled) for bias correction
 
 ---
 
@@ -48,7 +56,7 @@ Primary entrypoint:
 - Exactly one lead (L) is selected
 - Ensemble mean computed dynamically over M
 - L coordinate dropped
-- Models stacked along predictor axis C
+- Models run independently through CCA (per-model, not stacked)
 
 ---
 
@@ -56,7 +64,7 @@ Primary entrypoint:
 
 - Forecast ensemble means are written earlier in pipeline
 - Stored under `data/output/nmme_monthly`
-- Used only for CPT forecast application
+- Used for CPT forecast application and anomaly map generation
 
 ---
 
@@ -64,89 +72,99 @@ Primary entrypoint:
 
 All CPT inputs are explicitly prepared to satisfy CPTv10:
 
-- Dimensions: (T, C, Y, X)
-- Numeric C axis
-- Required attributes:
-  - `missing`
-  - `units`
+- Dimensions: (T, M, Y, X) — per-model CCA uses M for model members
+- Numeric T axis (datetime64)
+- Required attributes: `missing`, `units`
 - Explicit axis mapping passed to CPT
+- Season format: `Mon-Mon` (e.g., `Feb-Apr`, `Jun-Aug`) throughout config and scripts
 
 ---
 
-## Configuration‑Driven Behavior
+## Configuration-Driven Behavior
 
 All runtime behavior is controlled by `confignmme.yaml`:
 
 - Model list
-- Region definitions
-- Seasons
-- Path patterns
-- I/O locations
+- Region definitions (CONUS, Mexico, Venezuela, Iran, C.Asia)
+- PyCPT variables and CCA settings
+- Path patterns and I/O locations
+- `pycpt.predictand` block (single predictand path and variable name)
+
+---
 
 ## Arraylake Stage
 
 - The Arraylake stage is optional and config-driven via `arraylake.enabled`.
 - It appends new NMME forecast start dates into an external Arraylake repo.
-- It reads `ARRAYLAKE_TOKEN` from `arraylake/.env` when not already set in the environment.
-- The stage is opt-in through the unified runner stage list.
+- It reads `ARRAYLAKE_TOKEN` from `arraylake/.env` when not already set.
+- The stage is opt-in via the unified runner stage list.
+- If `arraylake.enabled` is false in config, the stage is skipped (not run even if listed).
 
-No hard‑coded assumptions.
+---
 
 ## Code Organization
 
 - Shared workflow helpers are under `utils/`.
 - PyCPT helpers live in `utils/nmme_pycpt_utils.py`.
 - Product build, plotting, and write modules are composed via `utils/nmme_products_utils.py`.
+- Seasonal anomaly map generation is in `utils/nmme_plot.py` (`nmme_plot_seasonal()`).
+- PyCPT bias-corrected map generation is in `products/make_pycpt_maps.py`.
+- Hindcast skill computation is in `static/skill/` (`compute_rpss.py`, `compute_acc.py`).
+- Skill plot generation is in `static/skill/` (`plot_rpss.py`, `plot_acc.py`).
 
 ---
 
 ## Static Files & Dependencies
 
-The workflow depends on **two types of precomputed static files** that must be available before running products:
+The workflow depends on **three types of precomputed static files**.
 
 ### 1. Climatology Files
 
 - Purpose: Baseline climate statistics (mean fields) for anomaly computation
-- Source: `static/make_sfs_climo_from_reforecast.py` (builds from hindcast reforecasts)
+- Source: `static/make_sfs_climo_from_reforecast.py`
 - Location: `/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020/`
-- Naming: `{model}.{var}_{level}.clim.1991-2020.nc` (e.g., `NOAA-SFS.prec_sfc.clim.1991-2020.nc`)
-- Generated: One-time setup or periodic refresh when reforecasts update
-- Required: Before products stage (anomalies cannot be computed without climatology reference)
+- Naming: `{model}.{var}_{level}.clim.1991-2020.nc`
+- Required: Before products stage
 
 ### 2. Tercile Threshold Files
 
-- Purpose: Model-specific tercile thresholds (33rd and 66th percentiles) for tercile probability maps
-- Source: `static/precompute_tercile_thresholds.py` (computed from hindcast climatology)
-- Location: `tercile_thresholds/` (relative to project root)
-- Naming: `{model}.{var}.{season}.terciles.1991-2020.nc` (e.g., `NOAA-SFS.prec.MAM.terciles.1991-2020.nc`)
-- Generated: One-time setup or periodic refresh if models/regions/seasons change
-- Dependency: Requires valid climatology files (terciles computed from climatology statistics)
+- Purpose: Model-specific tercile thresholds (33rd and 66th percentiles)
+- Source: `static/precompute_tercile_thresholds.py`
+- Location: `tercile_thresholds/`
+- Naming: `{model}.{var}.{season}.terciles.1991-2020.nc`
+- Required: Before tercile probability map generation
+
+### 3. Skill Score Files
+
+- Purpose: Hindcast skill scores (RPSS, ACC) for 1991–2020 validation period
+- Source: `static/skill/compute_rpss.py`, `static/skill/compute_acc.py`
+- Location: `/data/esplab/shared/model/initialized/nmme/skill/1991-2020/`
+- Naming: `{model}.{var}.rpss.1991-2020.nc`, `{model}.{var}.acc.1991-2020.nc`
+- One-time compute; plots published to website skill page
 
 ### Validation & Refresh
 
-Use `scripts/check_static_files.py` to validate existing files:
 ```bash
 python scripts/check_static_files.py --config confignmme.yaml \
    --climatology-root /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020 \
    --tercile-root tercile_thresholds --verbose
-```
 
-Generate or refresh using runner stages:
-```bash
 # Generate climatology (one-time, ~15-30 min)
 ./scripts/run_nmme_workflow.sh --stages climatology
 
-# Precompute tercile thresholds (one-time, ~5-10 min)
+# Precompute tercile thresholds (~5-10 min)
 ./scripts/run_nmme_workflow.sh --stages terciles
+
+# Compute hindcast skill scores (long-running; use screen)
+bash static/skill/run_skill.sh
 ```
 
 ---
 
 ## Deferred Components
 
-- Probabilistic CPT
-- Forecast application and output writing
-- Refactoring into train/apply phases
+- Forecast application and output writing for probabilistic CPT
+- Refactoring into explicit train/apply phases for pycpt
 
 ---
 
