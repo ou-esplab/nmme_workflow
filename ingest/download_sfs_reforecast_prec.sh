@@ -109,6 +109,8 @@ main() {
     MANIFEST="${OUTDIR}/manifest_${REMOTE_VAR}_reforecast_sync.txt"
   check_python_deps
   mkdir -p "$OUTDIR"
+  chgrp esplab "$OUTDIR" 2>/dev/null || true
+  chmod 775 "$OUTDIR" 2>/dev/null || true
 
   local py_out
   py_out="$(python3 - \
@@ -276,6 +278,11 @@ PY
   )"
 
     emit_python_output "$py_out"
+    printf '%s\n' "$py_out" | awk '/^WRITE: /{print $2}' | while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        chgrp esplab "$f" 2>/dev/null || true
+        chmod 775 "$f" 2>/dev/null || true
+    done
 
   {
     echo "s3_reforecast_root=${S3_REFORECAST_ROOT}"

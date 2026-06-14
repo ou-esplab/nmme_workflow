@@ -363,6 +363,8 @@ for model in "${!MODELURL[@]}"; do
       fi
 
       mkdir -p "$outdir"
+      chgrp esplab "$outdir" 2>/dev/null || true
+      chmod 775 "$outdir" 2>/dev/null || true
       url="$(build_url "$model" "$var" "$y" "$m")"
       model_attempted=$((model_attempted+1))
       log_debug "GET : [$var] $url -> $outfile"
@@ -405,6 +407,8 @@ for model in "${!MODELURL[@]}"; do
       fi
 
       model_saved=$((model_saved+1))
+      chgrp esplab "$outfile" 2>/dev/null || true
+      chmod 775 "$outfile" 2>/dev/null || true
 
       sleep "$REQUEST_PAUSE"
     done

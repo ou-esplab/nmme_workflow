@@ -121,6 +121,8 @@ main() {
   MANIFEST="${OUTDIR}/manifest_${REMOTE_VAR}_latest_nc.txt"
   check_python_deps
   mkdir -p "$OUTDIR"
+  chgrp esplab "$OUTDIR" 2>/dev/null || true
+  chmod 775 "$OUTDIR" 2>/dev/null || true
 
   local py_out
   if [[ "$DRY_RUN" == "1" ]]; then
@@ -286,6 +288,12 @@ PY
     return "$rc"
   else
         emit_python_output "$py_out"
+        local outfile_written
+        outfile_written="$(printf '%s\n' "$py_out" | awk -F= '/^OUTFILE=/{print $2; exit}')"
+        if [[ -n "$outfile_written" && -f "$outfile_written" ]]; then
+            chgrp esplab "$outfile_written" 2>/dev/null || true
+            chmod 775 "$outfile_written" 2>/dev/null || true
+        fi
   fi
 
   {
