@@ -68,7 +68,8 @@ def _to_0360(da: xr.DataArray) -> xr.DataArray:
 def _normalize_hindcast_dims(da: xr.DataArray) -> xr.DataArray:
     rmap = {}
     for old, new in [("S", "init"), ("M", "member"), ("L", "lead"),
-                     ("X", "lon"), ("Y", "lat")]:
+                     ("X", "lon"), ("Y", "lat"),
+                     ("latitude", "lat"), ("longitude", "lon")]:
         if old in da.dims and new not in da.dims:
             rmap[old] = new
     if rmap:
@@ -79,6 +80,11 @@ def _normalize_hindcast_dims(da: xr.DataArray) -> xr.DataArray:
         da = da.isel(Z=0, drop=True)
     if "lead" in da.dims and not pd.api.types.is_integer_dtype(da["lead"].dtype):
         da = da.assign_coords(lead=da["lead"].values.astype(int))
+    # Ensure lat/lon are float64 so xarray doesn't create outer-product broadcasts
+    # when comparing arrays from files that store coords as float32
+    for dim in ("lat", "lon"):
+        if dim in da.dims:
+            da = da.assign_coords({dim: da[dim].values.astype(float)})
     return da
 
 
@@ -139,6 +145,9 @@ def load_hindcast_single_lead_anom(
     clim = xr.open_dataset(clim_path)[var]
     if not pd.api.types.is_integer_dtype(clim["lead"].dtype):
         clim = clim.assign_coords(lead=clim["lead"].astype(int))
+    for dim in ("lat", "lon"):
+        if dim in clim.dims:
+            clim = clim.assign_coords({dim: clim[dim].values.astype(float)})
 
     if lead not in clim["lead"].values:
         return None, []
@@ -157,7 +166,7 @@ def load_hindcast_single_lead_anom(
         if not fp.exists():
             continue
         try:
-            ds = xr.open_dataset(fp, decode_times=False)
+            ds = xr.open_dataset(fp, decode_times=False, chunks={"lat": 30, "lon": 60})
         except Exception as exc:
             print(f"[WARN] Cannot open {fp}: {exc}")
             continue
@@ -175,7 +184,7 @@ def load_hindcast_single_lead_anom(
         anom = (da_lead - clim_a).reset_coords(drop=True)
         if "Z" in anom.dims:
             anom = anom.squeeze("Z", drop=True)
-        yearly_anoms.append(anom.load())
+        yearly_anoms.append(anom.load())  # compute in spatial chunks, then free file
         years_found.append(year)
         ds.close()
 
