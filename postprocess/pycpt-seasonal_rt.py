@@ -53,6 +53,7 @@ def _build_cpt_args(cfg: dict) -> dict:
     }
 
 
+
 def _years_to_dt64(coord) -> np.ndarray:
     """Convert S/T coordinate (cftime, datetime64, or integer years) to numpy datetime64."""
     vals = coord.values

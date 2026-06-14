@@ -29,7 +29,7 @@ def main() -> int:
         "--stages",
         nargs="+",
         default=["ingest", "preprocess", "products", "pycpt"],
-        help="Stages to run in order. Optional static: climatology terciles skill. Main: ingest preprocess products pycpt pycpt_maps publish ship-routing-products",
+        help="Stages to run in order. Static one-time (no --init needed): climatology terciles skill. Main (require --init): ingest preprocess products pycpt pycpt_maps publish ship-routing-products",
     )
     p.add_argument(
         "--climatology-root",
