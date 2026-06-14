@@ -10,6 +10,7 @@
   <ul class="nav nav-tabs" id="sectorTabs">
    <li class="active"><a href="#tab-standard"    data-toggle="tab">Standard</a></li>
    <li>              <a href="#tab-shiprouting"  data-toggle="tab">Ship Routing</a></li>
+   <li>              <a href="#tab-roadtransportation" data-toggle="tab">Road Transportation</a></li>
    <li>              <a href="#tab-energy"       data-toggle="tab">Energy</a></li>
    <li>              <a href="#tab-agriculture"  data-toggle="tab">Agriculture</a></li>
    <li>              <a href="#tab-fireweather"  data-toggle="tab">Fire Weather</a></li>
@@ -23,8 +24,12 @@
     <label for="fcstselecttype">Forecast Type&nbsp;</label>
     <select class="form-control" id="fcstselecttype" onchange="onTypeChange()">
      <option value="monthly">Monthly Anomalies</option>
+     <option value="seasonal_anomalies">Seasonal Anomalies</option>
      <option value="tercile_probs">Seasonal Tercile Probabilities</option>
      <option value="cpt_dominant">Combined Tercile Probabilities</option>
+     <option value="pycpt_anomalies">Seasonal Anomalies: PyCPT</option>
+     <option value="pycpt_tercile_probs">Seasonal Tercile Probabilities: PyCPT</option>
+     <option value="pycpt_cpt_dominant">Combined Tercile Probabilities: PyCPT</option>
     </select>
    </div>
    <div class="form-group" style="margin-right:10px">
@@ -153,6 +158,10 @@
    </script>
   </div>
 
+  <div class="tab-pane" id="tab-roadtransportation">
+   <p class="text-muted" style="margin-top:20px"><em>Road transportation products — coming soon.</em></p>
+  </div>
+
   <div class="tab-pane" id="tab-energy">
    <p class="text-muted" style="margin-top:20px"><em>Energy sector products — coming soon.</em></p>
   </div>
@@ -176,20 +185,36 @@
     "SST":     { varPrefix: "SST",    regions: ["Global"] }
   };
 
-  // Seasonal: variable -> varName
+  // Seasonal anomalies (raw model rolling 3-month means): variable -> { varPrefix, regions[] }
+  var seasonalAnomalyVars = {
+    "2m Temp": { varPrefix: "2mTemp", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "Precip":  { varPrefix: "Precip", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "SST":     { varPrefix: "SST",    regions: ["Global"] }
+  };
+
+  // Seasonal tercile products: variable -> varName
   var seasonalVars = {
     "Precipitation": "prec",
     "Temperature":   "tref"
   };
 
   var seasonalRegions = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
+  var pycptRegions    = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
+
+  var _mos = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var seasonMonthOptions = _mos.map(function(m) {
+    var end = _mos[(_mos.indexOf(m) + 2) % 12];
+    return { value: m, text: m + "-" + end };
+  });
+  var seasonTercileOptions = ["MAM","AMJ","MJJ","JJA","ASO","NDJ","Apr-Jul","Apr-Sep","Oct-Jan"];
 
   function populateSelect(id, options) {
     var sel = document.getElementById(id);
     sel.innerHTML = "";
     options.forEach(function(o) {
       var opt = document.createElement("option");
-      opt.text = o; opt.value = o;
+      if (typeof o === "object") { opt.value = o.value; opt.text = o.text; }
+      else { opt.text = o; opt.value = o; }
       sel.add(opt);
     });
   }
@@ -199,7 +224,14 @@
     var isMonthly = (type === "monthly");
     document.getElementById("lead-group").style.display   = isMonthly ? "" : "none";
     document.getElementById("season-group").style.display = isMonthly ? "none" : "";
-    populateSelect("fcstselectvar", isMonthly ? Object.keys(monthlyVars) : Object.keys(seasonalVars));
+    if (!isMonthly) {
+      populateSelect("fcstselectseason",
+        type === "seasonal_anomalies" ? seasonMonthOptions : seasonTercileOptions);
+    }
+    var varKeys = isMonthly ? Object.keys(monthlyVars) :
+                  (type === "seasonal_anomalies") ? Object.keys(seasonalAnomalyVars) :
+                  Object.keys(seasonalVars);
+    populateSelect("fcstselectvar", varKeys);
     onVarChange();
   }
 
@@ -209,6 +241,11 @@
     if (type === "monthly") {
       var regions = (monthlyVars[varVal] || monthlyVars["Precip"]).regions;
       populateSelect("fcstselectregion", regions);
+    } else if (type === "seasonal_anomalies") {
+      var regions = (seasonalAnomalyVars[varVal] || seasonalAnomalyVars["Precip"]).regions;
+      populateSelect("fcstselectregion", regions);
+    } else if (type.startsWith("pycpt_")) {
+      populateSelect("fcstselectregion", pycptRegions);
     } else {
       populateSelect("fcstselectregion", seasonalRegions);
     }
@@ -224,6 +261,12 @@
     return latest;
   }
 
+  var pycptProductMap = {
+    "pycpt_anomalies":     "anomalies",
+    "pycpt_tercile_probs": "tercile_probs",
+    "pycpt_cpt_dominant":  "cpt_dominant"
+  };
+
   function buildImagePath() {
     var type         = document.getElementById("fcstselecttype").value;
     var date         = document.getElementById("fcstselectdate").value.trim();
@@ -238,6 +281,20 @@
       if (!cfg) return null;
       return "images/" + resolvedDate + "/monthly/" + region + "/" +
              cfg.varPrefix + region + "Month" + leadNum + ".png";
+    } else if (type === "seasonal_anomalies") {
+      var season = document.getElementById("fcstselectseason").value.trim();
+      var cfg = seasonalAnomalyVars[varVal];
+      if (!cfg) return null;
+      return "images/" + resolvedDate + "/seasonal_anomalies/" + region + "/" +
+             cfg.varPrefix + region + "Season" + season + ".png";
+    } else if (type.startsWith("pycpt_")) {
+      var season  = document.getElementById("fcstselectseason").value.trim();
+      var varName = seasonalVars[varVal];
+      if (!varName) return null;
+      var product = pycptProductMap[type];
+      if (!product) return null;
+      return "images/" + resolvedDate + "/seasonal_pycpt/" + product + "/" + region + "/" +
+             "NMME_" + resolvedDate + "_" + region + "_" + season + "_" + varName + "_" + product + ".png";
     } else {
       var season  = document.getElementById("fcstselectseason").value.trim();
       var varName = seasonalVars[varVal];

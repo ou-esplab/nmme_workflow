@@ -25,6 +25,7 @@ from utils.nmme_products_utils import (
     nmme_plot,
     nmme_write,
 )
+from utils.nmme_plot import nmme_plot_seasonal
 
 warnings.filterwarnings("ignore")
 
@@ -111,6 +112,8 @@ def main() -> int:
         nmme_plot(ds_fcst, figpath, land_mask_path=land_ocean_mask)
         assert "valid" in ds_fcst.coords, ds_fcst.coords
         nmme_write(ds_fcst, fcst_yyyymm, forecast_root=str(forecast_root))
+        seas_dir = forecast_root / fcst_yyyymm / "data" / "seasonal"
+        nmme_plot_seasonal(seas_dir, figpath, fcst_yyyymm, land_mask_path=land_ocean_mask)
         print(f"[INFO] Products written for {fcst_yyyymm}")
 
     return 0

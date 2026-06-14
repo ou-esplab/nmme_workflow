@@ -95,6 +95,7 @@ PUBLISH_ENABLED="${PUBLISH_ENABLED:-$(cfg_get 'pipeline.publish.enabled' '1')}"
 PUBLISH_DRY_RUN="${PUBLISH_DRY_RUN:-$(cfg_get 'pipeline.publish.dry_run' '0')}"
 PUBLISH_COPY_MONTHLY="${PUBLISH_COPY_MONTHLY:-$(cfg_get 'pipeline.publish.copy_monthly' '1')}"
 PUBLISH_COPY_SEASONAL="${PUBLISH_COPY_SEASONAL:-$(cfg_get 'pipeline.publish.copy_seasonal' '1')}"
+PUBLISH_COPY_PYCPT="${PUBLISH_COPY_PYCPT:-$(cfg_get 'pipeline.publish.copy_pycpt' '1')}"
 PUBLISH_COPY_LATEST="${PUBLISH_COPY_LATEST:-$(cfg_get 'pipeline.publish.copy_latest' '1')}"
 PUBLISH_UPDATE_HTML="${PUBLISH_UPDATE_HTML:-$(cfg_get 'pipeline.publish.update_html' '1')}"
 PUBLISH_DEST_HOST="${PUBLISH_DEST_HOST:-$(cfg_get 'pipeline.publish.dest_host' 'somclass23')}"
@@ -102,6 +103,7 @@ PUBLISH_DEST_DIR="${PUBLISH_DEST_DIR:-$(cfg_get 'pipeline.publish.dest_dir' '/da
 PUBLISH_SSH_KEY="${PUBLISH_SSH_KEY:-$(cfg_get 'pipeline.publish.ssh_key' '~/.ssh/id_ed25519')}"
 PUBLISH_COPY_STATIC_ONCE="${PUBLISH_COPY_STATIC_ONCE:-$(cfg_get 'pipeline.publish.copy_static_once' '1')}"
 PUBLISH_COPY_STATIC_FORCE="${PUBLISH_COPY_STATIC_FORCE:-$(cfg_get 'pipeline.publish.copy_static_force' '0')}"
+PUBLISH_COPY_HTML_FORCE="${PUBLISH_COPY_HTML_FORCE:-$(cfg_get 'pipeline.publish.copy_html_force' '0')}"
 PUBLISH_STATIC_CLIMO_SRC="${PUBLISH_STATIC_CLIMO_SRC:-$(cfg_get 'pipeline.publish.static_climatology_source' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
 PUBLISH_STATIC_TERCILES_SRC="${PUBLISH_STATIC_TERCILES_SRC:-$(cfg_get 'pipeline.publish.static_terciles_source' '/data/esplab/shared/model/initialized/nmme/terciles/1991-2020')}"
 PUBLISH_HINDCASTS_DEST_DIR="${PUBLISH_HINDCASTS_DEST_DIR:-$(cfg_get 'pipeline.publish.hindcasts_dest_dir' '')}"
@@ -110,6 +112,7 @@ PUBLISH_ENABLED="$(to_bool01 "$PUBLISH_ENABLED")"
 PUBLISH_DRY_RUN="$(to_bool01 "$PUBLISH_DRY_RUN")"
 PUBLISH_COPY_MONTHLY="$(to_bool01 "$PUBLISH_COPY_MONTHLY")"
 PUBLISH_COPY_SEASONAL="$(to_bool01 "$PUBLISH_COPY_SEASONAL")"
+PUBLISH_COPY_PYCPT="$(to_bool01 "$PUBLISH_COPY_PYCPT")"
 PUBLISH_COPY_LATEST="$(to_bool01 "$PUBLISH_COPY_LATEST")"
 PUBLISH_UPDATE_HTML="$(to_bool01 "$PUBLISH_UPDATE_HTML")"
 PUBLISH_COPY_STATIC_ONCE="$(to_bool01 "$PUBLISH_COPY_STATIC_ONCE")"
@@ -171,10 +174,16 @@ _mkdir_dirs=(
 for _region in "${REGIONS[@]}"; do
   _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/monthly/${_region}")
   _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_region}")
+  _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/${_region}")
   for _product in threshold_maps most_likely cpt_dominant seasonal_total_summary; do
     _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal/${_product}/${_region}")
   done
+  for _product in anomalies tercile_probs most_likely cpt_dominant; do
+    _mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_pycpt/${_product}/${_region}")
+  done
 done
+_mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/Global")
+_mkdir_dirs+=("${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/NorthAmerica")
 
 _mkdir_cmd="mkdir -p"
 for _d in "${_mkdir_dirs[@]}"; do
@@ -227,6 +236,29 @@ if [[ "$PUBLISH_COPY_SEASONAL" == "1" ]]; then
       fi
     done
   done
+
+  # Copy raw seasonal anomaly maps (rolling 3-month means, all regions)
+  if [[ -d "${sourceDir}/images/anomalies/seasonal" ]]; then
+    for _region in Global NorthAmerica "${REGIONS[@]}"; do
+      if [[ -d "${sourceDir}/images/anomalies/seasonal/${_region}" ]]; then
+        run_cmd scp -i "${ssh_key_expanded}" \
+          "${sourceDir}/images/anomalies/seasonal/${_region}/"* \
+          "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_anomalies/${_region}/" 2>/dev/null || true
+      fi
+    done
+  fi
+fi
+
+if [[ "$PUBLISH_COPY_PYCPT" == "1" ]]; then
+  for _product in anomalies tercile_probs most_likely cpt_dominant; do
+    for _region in "${REGIONS[@]}"; do
+      if [[ -d "${sourceDir}/images/pycpt/${_product}/${_region}" ]]; then
+        run_cmd scp -r -i "${ssh_key_expanded}" \
+          "${sourceDir}/images/pycpt/${_product}/${_region}/." \
+          "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/images/${fcstdate}/seasonal_pycpt/${_product}/${_region}/"
+      fi
+    done
+  done
 fi
 
 # Copy ship routing images (winds and currents)
@@ -263,16 +295,16 @@ else
   echo "[WARN] docs/products_outputs.md not found; skipping docs publish"
 fi
 
-# One-time: copy the HTML template to the destination if it doesn't exist yet.
-# This allows a new dest_dir to work immediately without a manual copy.
+# Copy the HTML template to the destination if it doesn't exist yet, or if
+# copy_html_force=true (use to push structural changes to forecasts.remote.html).
 _remote_html="${PUBLISH_DEST_DIR}/forecasts.html"
 _local_html="${script_dir}/forecasts.remote.html"
 if [[ -f "$_local_html" ]]; then
   if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
-    echo "[DRY-RUN] would copy forecasts.remote.html -> ${_remote_html} if not present"
-  elif ! ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "test -f '${_remote_html}'"; then
+    echo "[DRY-RUN] would copy forecasts.remote.html -> ${_remote_html} (force=${PUBLISH_COPY_HTML_FORCE})"
+  elif [[ "$PUBLISH_COPY_HTML_FORCE" == "1" ]] || ! ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "test -f '${_remote_html}'"; then
     run_cmd scp -i "${ssh_key_expanded}" "$_local_html" "${PUBLISH_DEST_HOST}:${_remote_html}"
-    echo "[INFO] Initialized ${_remote_html}"
+    echo "[INFO] Copied forecasts.remote.html -> ${_remote_html}"
   fi
 fi
 
@@ -283,8 +315,12 @@ _html_out="${script_dir}/forecasts.${fcstdate}.out.html"
 if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
   echo "[DRY-RUN] would sync forecasts.html date list from ${PUBLISH_DEST_DIR}/images/"
 else
+  # Filter locally so remote login-shell noise (tcsh stdout on connect) does not
+  # pollute the date list. Omit 2>/dev/null from the remote command: tcsh treats
+  # it as a filename arg, and SSH stderr is not captured here anyway.
   _remote_dates=$(ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
-    "ls '${PUBLISH_DEST_DIR}/images/' 2>/dev/null | grep -E '^[0-9]{6}$' | tr '\n' ' '" || true)
+    "ls '${PUBLISH_DEST_DIR}/images/'" \
+    | grep -E '^[0-9]{6}$' | tr '\n' ' ' || true)
   if [[ -n "$_remote_dates" ]] && \
      scp -q -i "${ssh_key_expanded}" \
        "${PUBLISH_DEST_HOST}:${PUBLISH_DEST_DIR}/forecasts.html" "$_html_in" 2>/dev/null; then

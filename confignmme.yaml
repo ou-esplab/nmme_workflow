@@ -53,9 +53,6 @@ regions:
 
 # ------------------------------------------------------------
 # PyCPT Configuration (used when pycpt stage is active)
-# Regions and seasons come from the top-level regions: block.
-# This section controls variables, CCA settings, and optional
-# per-region model overrides.
 # ------------------------------------------------------------
 pycpt:
   # Variables to bias-correct. Each entry must have a matching key
@@ -74,10 +71,18 @@ pycpt:
     crossvalidation_window: 5
     synchronous_predictors: true
 
-  # Optional per-region model overrides.
-  # lat/lon/seasons are taken from the top-level regions: block.
+  # Per-region entries. lat/lon/seasons come from the top-level regions: block.
+  # Add models: override here to restrict which models run for a region.
   regions:
     - name: Mexico
+
+    - name: CONUS
+
+    - name: Iran
+
+    - name: Venezuela
+
+    - name: C.Asia
 
 
 # ------------------------------------------------------------
@@ -89,11 +94,9 @@ data:
     root: /data/esplab/nmme-backup
     preprocess_root: /data/esplab/shared/model/initialized/nmme/forecast/monthly
 
-    # Per-variable observation paths (keyed by var name matching pycpt.variables)
-    predictands:
-      prec:
-        dir: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p25
-        var: precip
+    predictand:
+      dir: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p25
+      var: precip
 
     # The variable name used in your model NetCDF directory & file prefix
     model_vars:
@@ -106,23 +109,22 @@ data:
       CanESM5: CanESM5
       GEM5.2-NEMO: GEM5.2-NEMO
       NCEP-CFSv2: NCEP-CFSv2
+      NCAR-CESM1: NCAR-CESM1
       COLA-RSMAS-CCSM4: COLA-RSMAS-CCSM4
       COLA-RSMAS-CESM1: COLA-RSMAS-CESM1
       NOAA-SFS: NOAA-SFS
 
     path_patterns:
-      # Hindcasts: wildcard year, fixed init month (mm from fcstdate)
+      # Hindcasts live across many years -> use wildcards for yyyy/mm
       hindcast: "{root}/{model}/hindcast/{var}/{var}_{model}_????_{mm}.nc"
 
       # Forecast lives for one init -> keep date-specific pattern
       forecast: "{root}/{model}/forecast/{var}/{var}_{model}_{yyyy}_{mm}.nc"
 
-    # Per-model path pattern overrides (use when a model's files live in a
-    # non-standard subdirectory, e.g. reforecast/ instead of hindcast/)
-    path_pattern_overrides:
+    model_path_patterns:
+      # NOAA-SFS uses "reforecast" instead of "hindcast"
       NOAA-SFS:
-        hindcast: "{root}/NOAA-SFS/reforecast/{var}/{var}_{model}_????_{mm}.nc"
-        forecast: "{root}/NOAA-SFS/forecast/{var}/{var}_{model}_{yyyy}_{mm}.nc"
+        hindcast: "{root}/{model}/reforecast/{var}/{var}_{model}_????_{mm}.nc"
 
   # Output locations
   output:
@@ -170,12 +172,13 @@ pipeline:
     copy_monthly: true
     copy_seasonal: true
     copy_latest: true
-    update_html: false
+    update_html: true
     dest_host: somclass23
     dest_dir: /data/web/kpegion/http/nmme/forecasts_test
     ssh_key: ~/.ssh/id_ed25519
     copy_static_once: true
     copy_static_force: false
+    copy_html_force: false
     static_climatology_source: /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020
     static_terciles_source: /data/esplab/shared/model/initialized/nmme/terciles/1991-2020
     hindcasts_dest_dir: /data/web/kpegion/http/nmme/hindcasts_test

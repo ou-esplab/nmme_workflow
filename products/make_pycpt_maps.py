@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""
+Produce bias-corrected forecast maps from PyCPT output files.
+
+For each (region, season, variable) found in the pycpt output directory:
+  1. Anomaly maps   — per-model + MME panels from .pycpt.det.anom.* files
+  2. Tercile probs  — 3-panel BN/NN/AN from .pycpt.prob.* files (MME only)
+  3. Most-likely    — dominant tercile map
+  4. CPT-dominant   — CPT-style dominant-category map
+
+Output goes to {nmme_forecast}/{init}/images/pycpt/{product}/{region}/
+"""
+
+import argparse
+import re
+import sys
+from pathlib import Path
+from math import ceil
+
+import matplotlib as mpl
+mpl.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
+import numpy as np
+import xarray as xr
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from utils.config import load_config
+from utils.paths import ensure_dir
+from utils.nmme_plot import seasonal_clevs
+from products.make_tercile_probability_maps import (
+    plot_probabilities,
+    plot_most_likely_from_prob,
+    plot_cpt_dominant_from_prob,
+    _to_percent_if_fraction,
+)
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+ANOM_META = {
+    "prec": {"label": "Precipitation Anomaly", "unit": "mm/day", "cmap": "BrBG"},
+    "tref": {"label": "2-m Temperature Anomaly", "unit": "°C",   "cmap": "RdBu_r"},
+}
+
+# Preferred model display order — NCAR-CESM1 excluded (not a real-time model)
+_MODEL_ORDER = [
+    "NASA_GEOSS2S", "CanESM5", "GEM5_2_NEMO",
+    "NCEP_CFSv2", "COLA_RSMAS_CCSM4", "COLA_RSMAS_CESM1", "NOAA_SFS",
+]
+
+# Reverse-sanitize model variable names for plot labels
+_UNSANITIZE = {
+    "NASA_GEOSS2S":     "NASA-GEOSS2S",
+    "GEM5_2_NEMO":      "GEM5.2-NEMO",
+    "NCEP_CFSv2":       "NCEP-CFSv2",
+    "COLA_RSMAS_CCSM4": "COLA-RSMAS-CCSM4",
+    "COLA_RSMAS_CESM1": "COLA-RSMAS-CESM1",
+    "NOAA_SFS":         "NOAA-SFS",
+}
+
+# Ensemble member counts per model (from hindcast M dimension)
+_NENS = {
+    "NASA_GEOSS2S":     4,
+    "CanESM5":         20,
+    "GEM5_2_NEMO":     20,
+    "NCEP_CFSv2":      24,
+    "COLA_RSMAS_CCSM4": 10,
+    "COLA_RSMAS_CESM1": 10,
+    "NOAA_SFS":        11,
+}
+_NENS_TOTAL = sum(_NENS.values())
+
+
+def _model_label(var_name: str) -> str:
+    label = _UNSANITIZE.get(var_name, var_name)
+    if var_name == "MME":
+        return f"MME\n({_NENS_TOTAL} ens)"
+    nens = _NENS.get(var_name)
+    return f"{label}\n({nens} ens)" if nens else label
+
+
+
+
+# ---------------------------------------------------------------------------
+# File discovery
+# ---------------------------------------------------------------------------
+
+def discover_cases(pycpt_root: Path, init: str) -> list[dict]:
+    """
+    Return list of dicts with keys: region, season, var, lev, det_path, prob_path.
+    Discovers from det files; skips if corresponding prob file is missing.
+    """
+    pattern = f"NMME_fcst_{init}.pycpt.det.anom.*.nc"
+    cases = []
+    for det in sorted(pycpt_root.glob(f"{init}/*/*/data/{pattern}")):
+        # Structure: {pycpt_root}/{init}/{region}/{season}/data/{file}
+        season = det.parent.parent.name
+        region = det.parent.parent.parent.name
+
+        # parse var_lev from filename: ...det.anom.{var}_{lev}.{region}.{season}.nc
+        m = re.search(r"\.pycpt\.det\.anom\.([^.]+)\..*\.nc$", det.name)
+        if not m:
+            continue
+        var_lev = m.group(1)
+        if "_" in var_lev:
+            var, lev = var_lev.rsplit("_", 1)
+        else:
+            var, lev = var_lev, ""
+
+        prob = det.parent / det.name.replace(".det.anom.", ".prob.")
+        if not prob.exists():
+            print(f"[WARN] prob file missing for {det.name}, skipping")
+            continue
+
+        cases.append(dict(region=region, season=season, var=var, lev=lev,
+                          det_path=det, prob_path=prob))
+    return cases
+
+
+# ---------------------------------------------------------------------------
+# Anomaly map
+# ---------------------------------------------------------------------------
+
+def plot_pycpt_anomalies(
+    det_ds: xr.Dataset,
+    region: str,
+    season: str,
+    init_yyyymm: str,
+    var: str,
+    out_png: Path,
+    levels: "np.ndarray | None" = None,
+) -> None:
+    meta = ANOM_META.get(var, ANOM_META["tref"])
+
+    # Order models consistently; put MME last
+    present = set(det_ds.data_vars)
+    ordered = [v for v in _MODEL_ORDER if v in present]
+    ordered += [v for v in present if v not in ordered and v != "MME"]
+    if "MME" in present:
+        ordered.append("MME")
+
+    if levels is None:
+        levels = np.linspace(-2, 2, 13)
+    norm = TwoSlopeNorm(vmin=levels[0], vcenter=0.0, vmax=levels[-1])
+
+    ncols = 3
+    nrows = ceil(len(ordered) / ncols)
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(11, 3.5 * nrows + 1),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+        constrained_layout=True,
+    )
+    axes_flat = np.array(axes).flatten()
+
+    mappable = None
+    da_ref = det_ds[ordered[0]]
+    ext = [float(da_ref.lon.min()), float(da_ref.lon.max()),
+           float(da_ref.lat.min()), float(da_ref.lat.max())]
+
+    for i, vname in enumerate(ordered):
+        ax = axes_flat[i]
+        da = det_ds[vname]
+        ax.set_extent(ext, crs=ccrs.PlateCarree())
+        cf = ax.contourf(
+            da["lon"], da["lat"], da,
+            levels=levels,
+            cmap=meta["cmap"],
+            norm=norm,
+            extend="both",
+            transform=ccrs.PlateCarree(),
+        )
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+        ax.add_feature(cfeature.STATES, linewidth=0.4)
+        ax.set_title(_model_label(vname), fontsize=9)
+        mappable = cf
+
+    for j in range(len(ordered), len(axes_flat)):
+        axes_flat[j].set_visible(False)
+
+    fig.suptitle(
+        f"PyCPT Bias-Corrected {meta['label']}\n{init_yyyymm}  {region}  {season}",
+        fontsize=12, weight="bold",
+    )
+    if mappable is not None:
+        fig.colorbar(
+            mappable,
+            ax=[axes_flat[i] for i in range(len(ordered))],
+            orientation="horizontal",
+            fraction=0.04,
+            pad=0.04,
+            ticks=levels,
+            label=meta["unit"],
+        )
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Produce PyCPT bias-corrected forecast maps")
+    p.add_argument("--init",      required=True, help="Forecast init YYYYMM")
+    p.add_argument("--config",    default="confignmme.yaml")
+    p.add_argument("--pycpt-root", default=None,
+                   help="Override pycpt output root from config")
+    p.add_argument("--outdir",    default=None,
+                   help="Override image output root from config")
+    p.add_argument("--regions",   default="ALL",
+                   help="Comma-separated region names, or ALL")
+    p.add_argument("--vars",      default="ALL",
+                   help="Comma-separated variable names (prec/tref), or ALL")
+    return p.parse_args()
+
+
+def main() -> int:
+    args  = parse_args()
+    cfg   = load_config(args.config)
+    init  = args.init
+
+    pycpt_root = Path(args.pycpt_root or cfg["data"]["output"]["pycpt"])
+    fcst_root  = Path(args.outdir or cfg["data"]["output"]["nmme_forecast"])
+    img_root   = fcst_root / init / "images" / "pycpt"
+
+    region_filter = set(args.regions.split(",")) if args.regions != "ALL" else None
+    var_filter    = set(args.vars.split(","))    if args.vars != "ALL"    else None
+
+    cases = discover_cases(pycpt_root, init)
+    if not cases:
+        print(f"[WARN] No pycpt output files found under {pycpt_root}/{init}/")
+        return 0
+
+    # Pre-compute colourbar levels from raw seasonal NetCDF (one per var/lev)
+    var_clevs: dict[tuple, np.ndarray] = {}
+    for c in cases:
+        key = (c["var"], c["lev"])
+        if key not in var_clevs:
+            seas_nc = (fcst_root / init / "data" / "seasonal" /
+                       f"NMME_fcst_{init}.anom.seas.{c['var']}_{c['lev']}.emean.nc")
+            if seas_nc.exists():
+                ds_raw = xr.open_dataset(seas_nc)
+                var_clevs[key] = seasonal_clevs(ds_raw)
+                ds_raw.close()
+                print(f"[CLEVS] {key}: {var_clevs[key][0]:.2f} … {var_clevs[key][-1]:.2f}")
+            else:
+                print(f"[WARN] Raw seasonal NetCDF not found: {seas_nc}, using default clevs")
+                var_clevs[key] = np.linspace(-2, 2, 13)
+
+    for c in cases:
+        region, season, var = c["region"], c["season"], c["var"]
+
+        if region_filter and region not in region_filter:
+            continue
+        if var_filter and var not in var_filter:
+            continue
+
+        print(f"\n[{region}  {season}  {var}]")
+
+        stem = f"NMME_{init}_{region}_{season}_{var}"
+
+        # ----------------------------------------------------------------
+        # Anomaly maps (det file)
+        # ----------------------------------------------------------------
+        det_ds = xr.open_dataset(c["det_path"])
+        out_anom = img_root / "anomalies" / region / f"{stem}_anomalies.png"
+        plot_pycpt_anomalies(det_ds, region, season, init, var, out_anom,
+                             levels=var_clevs.get((c["var"], c["lev"])))
+        print(f"  [SAVED] {out_anom.name}")
+        det_ds.close()
+
+        # ----------------------------------------------------------------
+        # Tercile probability maps (prob file)
+        # ----------------------------------------------------------------
+        prob_ds = xr.open_dataset(c["prob_path"])
+        if "MME" not in prob_ds:
+            print(f"  [WARN] MME not in prob file, skipping tercile maps")
+            prob_ds.close()
+            continue
+
+        da_mme = prob_ds["MME"]   # (cat, lat, lon)
+        prob = {
+            "BN": _to_percent_if_fraction(
+                da_mme.sel(cat="bn").drop_vars("cat"), f"{region}/{season}/BN"),
+            "NN": _to_percent_if_fraction(
+                da_mme.sel(cat="nn").drop_vars("cat"), f"{region}/{season}/NN"),
+            "AN": _to_percent_if_fraction(
+                da_mme.sel(cat="an").drop_vars("cat"), f"{region}/{season}/AN"),
+        }
+
+        lead_label = "PyCPT Bias-Corrected"
+        var_label  = f"{var} | PyCPT Bias-Corrected"
+
+        out_tp = img_root / "tercile_probs" / region / f"{stem}_tercile_probs.png"
+        plot_probabilities(prob, region, season, init, lead_label, out_tp)
+        print(f"  [SAVED] {out_tp.name}")
+
+        out_ml = img_root / "most_likely" / region / f"{stem}_most_likely.png"
+        plot_most_likely_from_prob(prob, region, season, init, var_label, out_ml)
+        print(f"  [SAVED] {out_ml.name}")
+
+        out_cd = img_root / "cpt_dominant" / region / f"{stem}_cpt_dominant.png"
+        plot_cpt_dominant_from_prob(prob, region, season, init, var_label, out_cd)
+        print(f"  [SAVED] {out_cd.name}")
+
+        prob_ds.close()
+
+    print("\n[DONE]")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
