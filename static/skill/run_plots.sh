@@ -12,23 +12,23 @@ SKILLDIR="${SKILLDIR:-/data/esplab/shared/model/initialized/nmme/skill/1991-2020
 OUTDIR="${OUTDIR:-${SKILLDIR}/plots}"
 VARS="${VARS:-prec tref sst}"      # space-separated: "prec tref sst"
 
-echo "=== RPSS plot generation ==="
+echo "=== Skill plot generation (RPSS + ACC) ==="
 echo "Skilldir: ${SKILLDIR}"
 echo "Outdir:   ${OUTDIR}"
 
-for var in ${VARS}; do
+_plot_score() {
+    local score="$1" var="$2" plot_script="$3" metric="$4"
     echo ""
-    echo "--- var=${var} ---"
+    echo "--- ${score} var=${var} ---"
     for init_month in $(seq 1 12); do
         for season_lead in $(seq 1 7); do
-            # Check if at least one model file has data for this init/lead
             has_data=0
-            for nc in "${SKILLDIR}"/*.${var}.rpss.*.nc; do
+            for nc in "${SKILLDIR}"/*.${var}.${score}.*.nc; do
                 [ -f "${nc}" ] || continue
                 if ${PYTHON} -c "
 import xarray as xr, sys
 ds = xr.open_dataset('${nc}')
-r = ds['rpss']
+r = ds['${metric}']
 if ${init_month} in r.init_month.values and ${season_lead} in r.season_lead.values:
     sys.exit(0)
 sys.exit(1)
@@ -40,7 +40,7 @@ sys.exit(1)
 
             if [ "${has_data}" -eq 1 ]; then
                 echo "  Plotting: init=${init_month}  season_lead=${season_lead}"
-                ${PYTHON} static/skill/plot_rpss.py \
+                ${PYTHON} "static/skill/${plot_script}" \
                     --var "${var}" \
                     --init-month "${init_month}" \
                     --season-lead "${season_lead}" \
@@ -49,6 +49,11 @@ sys.exit(1)
             fi
         done
     done
+}
+
+for var in ${VARS}; do
+    _plot_score rpss "${var}" plot_rpss.py rpss
+    _plot_score acc  "${var}" plot_acc.py  acc
 done
 
 echo ""
