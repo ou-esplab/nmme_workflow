@@ -66,7 +66,8 @@ def _to_0360(da: xr.DataArray) -> xr.DataArray:
 def _normalize_hindcast_dims(da: xr.DataArray) -> xr.DataArray:
     rmap = {}
     for old, new in [("S", "init"), ("M", "member"), ("L", "lead"),
-                     ("X", "lon"), ("Y", "lat")]:
+                     ("X", "lon"), ("Y", "lat"),
+                     ("latitude", "lat"), ("longitude", "lon")]:
         if old in da.dims and new not in da.dims:
             rmap[old] = new
     if rmap:
