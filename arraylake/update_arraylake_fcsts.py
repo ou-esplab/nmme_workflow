@@ -125,6 +125,22 @@ def _candidate_files(model_name: str, variable: str):
     return sorted(Path(input_path, model_name, datatype, variable).glob(f"{variable}_{model_name}_*.nc"))
 
 
+def _encode_s_as_int_days(ds: "xr.Dataset", units: str, calendar: str) -> "xr.Dataset":
+    """Replace datetime S coord with integer day-offsets matching the existing zarr encoding."""
+    import re
+    m = re.match(r"days since (.+)", units)
+    if not m:
+        return ds
+    epoch = pd.Timestamp(m.group(1).strip())
+    int_days = np.array(
+        [(pd.Timestamp(v) - epoch).days for v in ds["S"].values], dtype=np.int64
+    )
+    ds = ds.assign_coords(S=int_days)
+    ds["S"].attrs = {"units": units, "calendar": calendar}
+    ds["S"].encoding = {"dtype": "int64"}
+    return ds
+
+
 models_to_process = []
 for model in runtime["models"]:
     name = model.get("name")
@@ -189,23 +205,21 @@ for entry in models_to_process:
     read_session = repo.readonly_session("main")
     read_store = read_session.store
 
-    s_encoding: dict = {}
+    s_units: str = ""
+    s_calendar: str = "proleptic_gregorian"
     try:
         import zarr as _zarr
         existing_ds = xr.open_zarr(read_store, group=group_name, consolidated=False)
         group_exists = True
         existing_vars = list(existing_ds.data_vars)
         existing_times = pd.Index(existing_ds["S"].values)
-        # Read S zarr attrs so we can re-use the same units/dtype on append,
-        # preventing the datetime64[ns] → int64-days encoding mismatch.
+        # Read the existing S zarr encoding so we can write new S values as
+        # the same int64 day-offset integers instead of datetime64[ns].
         _zgrp = _zarr.open(read_store, mode="r")
         if group_name in _zgrp and "S" in _zgrp[group_name]:
             _s_attrs = dict(_zgrp[group_name]["S"].attrs)
-            s_encoding = {"S": {
-                "dtype": _zgrp[group_name]["S"].dtype,
-                "units": _s_attrs.get("units", "days since 1970-01-01"),
-                "calendar": _s_attrs.get("calendar", "proleptic_gregorian"),
-            }}
+            s_units = _s_attrs.get("units", "")
+            s_calendar = _s_attrs.get("calendar", "proleptic_gregorian")
     except FileNotFoundError:
         group_exists = False
         existing_vars = []
@@ -304,7 +318,8 @@ for entry in models_to_process:
             ds_allvars = ds_allvars.reindex(L=existing_L)
 
     all_times = pd.Index(ds_allvars["S"].values)
-    missing_vars = [var for var in entry["variables"] if var not in existing_vars]
+    # Only include missing vars that were actually read into ds_allvars.
+    missing_vars = [var for var in entry["variables"] if var not in existing_vars and var in ds_allvars.data_vars]
     missing_times = all_times.difference(existing_times)
 
     if dry_run:
@@ -321,15 +336,15 @@ for entry in models_to_process:
 
     if missing_vars and len(existing_times) > 0:
         subset_missing_vars = ds_allvars[missing_vars].reindex(S=existing_times)
-        if s_encoding:
-            subset_missing_vars["S"].encoding.update(s_encoding["S"])
+        if s_units:
+            subset_missing_vars = _encode_s_as_int_days(subset_missing_vars, s_units, s_calendar)
         subset_missing_vars.chunk({"L": len(subset_missing_vars["L"]), "Y": len(subset_missing_vars["Y"]), "X": len(subset_missing_vars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", group=group_name)
         write_session.commit(f"Add missing variables for {group_name}")
 
     if len(missing_times) > 0 and len(existing_times) > 0:
         subset_missing_times = ds_allvars.reindex(S=missing_times)
-        if s_encoding:
-            subset_missing_times["S"].encoding.update(s_encoding["S"])
+        if s_units:
+            subset_missing_times = _encode_s_as_int_days(subset_missing_times, s_units, s_calendar)
         subset_missing_times.chunk({"L": len(subset_missing_times["L"]), "Y": len(subset_missing_times["Y"]), "X": len(subset_missing_times["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", append_dim="S", group=group_name)
         write_session.commit(f"Append new init times for {group_name}")
 
