@@ -243,7 +243,7 @@ for entry in models_to_process:
                         ds = ds.assign_coords(S=pd.DatetimeIndex(decoded))
                     else:
                         ds["S"] = pd.to_datetime(s_var.values)
-                if (~ds[variable].isel(M=0, L=0).isnull().all(dim=("Y", "X"))).item():
+                if (~ds[variable].isel(M=0, L=0).isnull().all(dim=("Y", "X"))).compute().item():
                     valid_ds_list.append(ds)
                 else:
                     total_files_skipped += 1
