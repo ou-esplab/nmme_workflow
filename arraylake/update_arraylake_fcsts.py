@@ -321,12 +321,16 @@ for entry in models_to_process:
 
     if missing_vars and len(existing_times) > 0:
         subset_missing_vars = ds_allvars[missing_vars].reindex(S=existing_times)
-        subset_missing_vars.chunk({"L": len(subset_missing_vars["L"]), "Y": len(subset_missing_vars["Y"]), "X": len(subset_missing_vars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", group=group_name, encoding=s_encoding)
+        if s_encoding:
+            subset_missing_vars["S"].encoding.update(s_encoding["S"])
+        subset_missing_vars.chunk({"L": len(subset_missing_vars["L"]), "Y": len(subset_missing_vars["Y"]), "X": len(subset_missing_vars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", group=group_name)
         write_session.commit(f"Add missing variables for {group_name}")
 
     if len(missing_times) > 0 and len(existing_times) > 0:
         subset_missing_times = ds_allvars.reindex(S=missing_times)
-        subset_missing_times.chunk({"L": len(subset_missing_times["L"]), "Y": len(subset_missing_times["Y"]), "X": len(subset_missing_times["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", append_dim="S", group=group_name, encoding=s_encoding)
+        if s_encoding:
+            subset_missing_times["S"].encoding.update(s_encoding["S"])
+        subset_missing_times.chunk({"L": len(subset_missing_times["L"]), "Y": len(subset_missing_times["Y"]), "X": len(subset_missing_times["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", append_dim="S", group=group_name)
         write_session.commit(f"Append new init times for {group_name}")
 
 logger.info("Arraylake update complete")
