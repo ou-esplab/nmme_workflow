@@ -126,18 +126,26 @@ def _candidate_files(model_name: str, variable: str):
 
 
 def _encode_s_as_int_days(ds: "xr.Dataset", units: str, calendar: str) -> "xr.Dataset":
-    """Replace datetime S coord with integer day-offsets matching the existing zarr encoding."""
+    """Replace datetime S coord with raw int64 day-offsets matching the existing zarr array.
+
+    Strips all attrs and encoding so xarray passes the integers straight to zarr
+    without CF re-encoding, which would silently switch units to nanoseconds.
+    The existing zarr array's attrs (units, calendar) apply to all values including
+    the appended ones, so we don't need to re-state them here.
+    """
     import re
     m = re.match(r"days since (.+)", units)
     if not m:
         return ds
     epoch = pd.Timestamp(m.group(1).strip())
+    # ds["S"].values here is datetime64[ns] — compute exact integer day offsets.
     int_days = np.array(
-        [(pd.Timestamp(v) - epoch).days for v in ds["S"].values], dtype=np.int64
+        [int((pd.Timestamp(v) - epoch) / pd.Timedelta("1D")) for v in ds["S"].values],
+        dtype=np.int64,
     )
     ds = ds.assign_coords(S=int_days)
-    ds["S"].attrs = {"units": units, "calendar": calendar}
-    ds["S"].encoding = {"dtype": "int64"}
+    ds["S"].attrs = {}      # no CF attrs — prevents xarray from re-encoding
+    ds["S"].encoding = {}   # no encoding — zarr gets raw int64 values directly
     return ds
 
 
