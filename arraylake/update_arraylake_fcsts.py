@@ -231,6 +231,12 @@ for entry in models_to_process:
                         rename_dict[old] = new
                 if rename_dict:
                     ds = ds.rename(rename_dict)
+                # Regrid ocean-grid fields (1°) to atmosphere grid (0.5°) so all
+                # variables within a model share the same Y/X coordinates in Arraylake.
+                if ds.sizes.get("Y", 0) == 181 and ds.sizes.get("X", 0) == 360:
+                    target_Y = np.arange(-90.0, 90.01, 0.5)
+                    target_X = np.arange(0.0, 360.0, 0.5)
+                    ds = ds.interp(Y=target_Y, X=target_X, method="linear")
                 ds = ds[[variable]]
                 if "S" in ds.coords:
                     s_var = ds["S"]
