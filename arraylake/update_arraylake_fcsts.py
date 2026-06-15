@@ -189,11 +189,23 @@ for entry in models_to_process:
     read_session = repo.readonly_session("main")
     read_store = read_session.store
 
+    s_encoding: dict = {}
     try:
+        import zarr as _zarr
         existing_ds = xr.open_zarr(read_store, group=group_name, consolidated=False)
         group_exists = True
         existing_vars = list(existing_ds.data_vars)
         existing_times = pd.Index(existing_ds["S"].values)
+        # Read S zarr attrs so we can re-use the same units/dtype on append,
+        # preventing the datetime64[ns] → int64-days encoding mismatch.
+        _zgrp = _zarr.open(read_store, mode="r")
+        if group_name in _zgrp and "S" in _zgrp[group_name]:
+            _s_attrs = dict(_zgrp[group_name]["S"].attrs)
+            s_encoding = {"S": {
+                "dtype": _zgrp[group_name]["S"].dtype,
+                "units": _s_attrs.get("units", "days since 1970-01-01"),
+                "calendar": _s_attrs.get("calendar", "proleptic_gregorian"),
+            }}
     except FileNotFoundError:
         group_exists = False
         existing_vars = []
@@ -283,6 +295,14 @@ for entry in models_to_process:
         ds_allvars[var].attrs.pop("missing_value", None)
         ds_allvars[var].encoding = {}
 
+    # If existing Arraylake L differs from new data L (e.g. legacy interleaved
+    # integer+float L), reindex to the existing L so append_dim="S" succeeds.
+    if group_exists and "L" in existing_ds.coords:
+        existing_L = existing_ds["L"].values
+        if len(existing_L) != ds_allvars.sizes.get("L", 0):
+            logger.warning("L size mismatch: new=%d existing=%d — reindexing to existing L", ds_allvars.sizes.get("L", 0), len(existing_L))
+            ds_allvars = ds_allvars.reindex(L=existing_L)
+
     all_times = pd.Index(ds_allvars["S"].values)
     missing_vars = [var for var in entry["variables"] if var not in existing_vars]
     missing_times = all_times.difference(existing_times)
@@ -301,12 +321,12 @@ for entry in models_to_process:
 
     if missing_vars and len(existing_times) > 0:
         subset_missing_vars = ds_allvars[missing_vars].reindex(S=existing_times)
-        subset_missing_vars.chunk({"L": len(subset_missing_vars["L"]), "Y": len(subset_missing_vars["Y"]), "X": len(subset_missing_vars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", group=group_name)
+        subset_missing_vars.chunk({"L": len(subset_missing_vars["L"]), "Y": len(subset_missing_vars["Y"]), "X": len(subset_missing_vars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", group=group_name, encoding=s_encoding)
         write_session.commit(f"Add missing variables for {group_name}")
 
     if len(missing_times) > 0 and len(existing_times) > 0:
         subset_missing_times = ds_allvars.reindex(S=missing_times)
-        subset_missing_times.chunk({"L": len(subset_missing_times["L"]), "Y": len(subset_missing_times["Y"]), "X": len(subset_missing_times["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", append_dim="S", group=group_name)
+        subset_missing_times.chunk({"L": len(subset_missing_times["L"]), "Y": len(subset_missing_times["Y"]), "X": len(subset_missing_times["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", append_dim="S", group=group_name, encoding=s_encoding)
         write_session.commit(f"Append new init times for {group_name}")
 
 logger.info("Arraylake update complete")
