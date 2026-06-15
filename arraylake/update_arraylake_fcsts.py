@@ -211,7 +211,8 @@ for entry in models_to_process:
         files = _candidate_files(model_name, variable)
         total_files_found += len(files)
         if target_date:
-            files = [path for path in files if target_date in path.name]
+            date_in_filename = f"{target_date[:4]}_{target_date[4:]}"
+            files = [path for path in files if date_in_filename in path.name]
         if group_exists and variable in existing_vars:
             max_existing = pd.Timestamp(existing_times.max()).strftime("%Y%m") if len(existing_times) else "000000"
             files = [path for path in files if path.name.rsplit("_", 1)[-1].split(".")[0].replace("_", "") > max_existing]
