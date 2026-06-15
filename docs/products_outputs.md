@@ -116,11 +116,18 @@ forecast can translate to a strong BN or AN signal in some regions.
 
 ### 7. PyCPT Bias-Corrected Forecast Maps *(regional, per season)*
 
-**What it shows:** Bias-corrected deterministic forecast anomalies from per-model CCA (Canonical Correlation Analysis), averaged across models for an MME estimate. These remove systematic model errors via MOS training on 1991–2020 hindcasts.
+**What it shows:** Bias-corrected forecasts from per-model CCA (Canonical Correlation Analysis), averaged across models for an MME estimate. These remove systematic model errors via MOS training on 1991–2020 hindcasts. Four map types are produced per region and season:
 
-**How to read it:** Similar to raw anomaly maps but based on the CCA-corrected forecast. Typically shows more physically consistent spatial patterns than raw ensemble means.
+| Map type | Description |
+|----------|-------------|
+| **Anomaly** | MME deterministic anomaly from CCA-corrected per-model forecasts |
+| **Tercile probabilities** | BN/NN/AN probability maps (same format as raw NMME tercile maps) |
+| **Most likely category** | Single-panel dominant-category summary |
+| **CPT-style dominant** | Dominant category with shading scaled by probability strength |
 
-**Available for:** Configured pycpt regions (CONUS, Mexico, Venezuela, Iran, C.Asia) and seasons listed in `confignmme.yaml`.
+**How to read it:** Similar to raw anomaly and tercile maps but based on CCA-corrected forecasts. Typically shows more physically consistent spatial patterns than raw ensemble means.
+
+**Available for:** Configured pycpt regions (CONUS, Mexico, Venezuela, Iran, C.Asia) and seasons listed in `confignmme.yaml`. Currently only `prec` is bias-corrected.
 
 ---
 
@@ -200,13 +207,15 @@ Raw NMME products use 3-char season codes (MAM, JJA, etc.). PyCPT products use t
 NetCDF files are provided for users who want to work with the forecast data directly.
 All files are located under `forecast/{YYYYMM}/data/`.
 
-| File | Contents |
-|------|---------|
-| `NMME_fcst_{YYYYMM}.anom.monthly.{var}.emean.nc` | Per-model and MME ensemble-mean monthly anomaly (leads 0–8) |
-| `NMME_fcst_{YYYYMM}.anom.seas.{var}.emean.nc` | Per-model and MME ensemble-mean seasonal (3-month mean) anomaly |
-| `NMME_{YYYYMM}_{Region}_{Season}_{var}_tercile_probs.nc` | BN, NN, AN probability fields (%) on a 1° regional grid |
+| File | Location | Contents |
+|------|----------|---------|
+| `NMME_fcst_{YYYYMM}.anom.monthly.{var}.emean.nc` | `forecast/{YYYYMM}/data/` | Per-model and MME ensemble-mean monthly anomaly (leads 0–8) |
+| `NMME_fcst_{YYYYMM}.anom.seas.{var}.emean.nc` | `forecast/{YYYYMM}/data/` | Per-model and MME ensemble-mean seasonal (3-month mean) anomaly |
+| `NMME_{YYYYMM}_{Region}_{Season}_{var}_tercile_probs.nc` | `forecast/{YYYYMM}/data/` | BN, NN, AN probability fields (%) on a 1° regional grid |
+| `NMME_fcst_{YYYYMM}.pycpt.det.anom.{var}_{lev}.{Region}.{Season}.nc` | `forecast/pycpt/{YYYYMM}/{Region}/{Season}/data/` | Per-model CCA deterministic anomaly fields |
+| `NMME_fcst_{YYYYMM}.pycpt.prob.{var}_{lev}.{Region}.{Season}.nc` | `forecast/pycpt/{YYYYMM}/{Region}/{Season}/data/` | Per-model CCA tercile probabilities (%), `cat` dim = [bn, nn, an] |
 
-Where `{var}` is one of `prec_sfc`, `tref_2m`, `sst_sfc`, `h200_200`.
+Where `{var}` is one of `prec_sfc`, `tref_2m`, `sst_sfc`, `h200_200`; PyCPT files currently use `prec_sfc` only. `{Season}` in PyCPT paths uses the collapsed form (e.g., `MarMay` rather than `Mar-May`).
 
 ### Image Files
 
@@ -221,10 +230,13 @@ All images are located under `forecast/{YYYYMM}/images/`.
 | Most likely category | `most_likely/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_most_likely.png` |
 | Threshold maps | `threshold_maps/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_thresholds.png` |
 | Seasonal total summary | `seasonal_total_summary/{Region}/` | `NMME_{YYYYMM}_{Region}_{Season}_{var}_seasonal_total_summary.png` |
-| PyCPT bias-corrected maps | `pycpt/{Region}/` | `{var}_{Region}_{Season}_{YYYYMM}_cca.png` |
+| PyCPT anomaly | `pycpt/anomalies/{Region}/` | `*_anomalies.png` |
+| PyCPT tercile probabilities | `pycpt/tercile_probs/{Region}/` | `*_tercile_probs.png` |
+| PyCPT most likely category | `pycpt/most_likely/{Region}/` | `*_most_likely.png` |
+| PyCPT CPT-style dominant | `pycpt/cpt_dominant/{Region}/` | `*_cpt_dominant.png` |
 | Skill score maps (static) | `skill/plots/` | `rpss_{var}_init{MM}_{Season}.png`, `acc_{var}_init{MM}_{Season}.png` |
 
-Where `{var}` is `prec`, `tref`, or `sst`; `{N}` is the lead month number (0–8); `{Var}` is `Precip`, `2mTemp`, or `SST`; `{Mon}` is the 3-char season label (e.g., `Jun`, `Sep`); `{MM}` is the two-digit init month.
+Where `{var}` is `prec`, `tref`, or `sst`; `{N}` is the lead month number (0–8); `{Var}` is `Precip`, `2mTemp`, or `SST`; `{Mon}` is the 3-char season label (e.g., `Jun`, `Sep`); `{MM}` is the two-digit init month. All images are under `forecast/{YYYYMM}/images/`; PyCPT images are under `forecast/{YYYYMM}/images/pycpt/`.
 
 ---
 
