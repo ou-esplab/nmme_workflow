@@ -231,6 +231,13 @@ for entry in models_to_process:
                         rename_dict[old] = new
                 if rename_dict:
                     ds = ds.rename(rename_dict)
+                # Drop singleton level dim (Z) and transpose to canonical
+                # Arraylake order (S, M, L, Y, X).
+                if "Z" in ds.dims and ds.sizes["Z"] == 1:
+                    ds = ds.squeeze("Z", drop=True)
+                canonical = [d for d in ("S", "M", "L", "Y", "X") if d in ds.dims]
+                if canonical and list(ds[variable].dims) != canonical:
+                    ds = ds.transpose(*canonical)
                 # Regrid ocean-grid fields (1°) to atmosphere grid (0.5°) so all
                 # variables within a model share the same Y/X coordinates in Arraylake.
                 if ds.sizes.get("Y", 0) == 181 and ds.sizes.get("X", 0) == 360:
@@ -266,7 +273,8 @@ for entry in models_to_process:
         logger.info("No new data found for %s", model_name)
         continue
 
-    ds_allvars = xr.merge(ds_list)
+    ds_allvars = xr.merge(ds_list, join="outer")
+
     for var in ds_allvars.data_vars:
         ds_allvars[var].attrs.pop("missing_value", None)
         ds_allvars[var].encoding = {}
