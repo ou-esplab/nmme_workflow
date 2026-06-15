@@ -228,7 +228,16 @@ for entry in models_to_process:
                     ds = ds.rename(rename_dict)
                 ds = ds[[variable]]
                 if "S" in ds.coords:
-                    ds["S"] = pd.to_datetime(ds["S"].values)
+                    s_var = ds["S"]
+                    if np.issubdtype(s_var.dtype, np.integer) and "units" in s_var.attrs:
+                        from xarray.coding.times import decode_cf_datetime
+                        decoded = decode_cf_datetime(
+                            s_var.values, s_var.attrs["units"],
+                            s_var.attrs.get("calendar", "standard"),
+                        )
+                        ds = ds.assign_coords(S=pd.DatetimeIndex(decoded))
+                    else:
+                        ds["S"] = pd.to_datetime(s_var.values)
                 if (~ds[variable].isel(M=0, L=0).isnull().all(dim=("Y", "X"))).item():
                     valid_ds_list.append(ds)
                 else:
