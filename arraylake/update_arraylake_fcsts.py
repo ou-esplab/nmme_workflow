@@ -238,12 +238,16 @@ for entry in models_to_process:
                 canonical = [d for d in ("S", "M", "L", "Y", "X") if d in ds.dims]
                 if canonical and list(ds[variable].dims) != canonical:
                     ds = ds.transpose(*canonical)
-                # Regrid ocean-grid fields (1°) to atmosphere grid (0.5°) so all
-                # variables within a model share the same Y/X coordinates in Arraylake.
-                if ds.sizes.get("Y", 0) == 181 and ds.sizes.get("X", 0) == 360:
+                # NOAA-SFS: regrid ocean-grid (1°) fields to atmosphere grid (0.5°)
+                # so all variables share the same Y/X in Arraylake.
+                if model_name == "NOAA-SFS" and ds.sizes.get("Y", 0) == 181 and ds.sizes.get("X", 0) == 360:
                     target_Y = np.arange(-90.0, 90.01, 0.5)
                     target_X = np.arange(0.0, 360.0, 0.5)
                     ds = ds.interp(Y=target_Y, X=target_X, method="linear")
+                # Normalize L to float so integer-coord files (h200, h500) align
+                # with half-integer-coord files (prec, tref, sst) during merge.
+                if "L" in ds.coords and np.issubdtype(ds["L"].dtype, np.integer):
+                    ds = ds.assign_coords(L=ds["L"].values.astype(float) + 0.5)
                 ds = ds[[variable]]
                 if "S" in ds.coords:
                     s_var = ds["S"]
