@@ -125,28 +125,47 @@ def _candidate_files(model_name: str, variable: str):
     return sorted(Path(input_path, model_name, datatype, variable).glob(f"{variable}_{model_name}_*.nc"))
 
 
-def _encode_s_as_int_days(ds: "xr.Dataset", units: str, calendar: str) -> "xr.Dataset":
-    """Replace datetime S coord with raw int64 day-offsets matching the existing zarr array.
+_NEW_GROUP_EPOCH = "days since 1960-01-01 00:00:00"
+_NEW_GROUP_EPOCH_TS = pd.Timestamp("1960-01-01")
 
-    Strips all attrs and encoding so xarray passes the integers straight to zarr
-    without CF re-encoding, which would silently switch units to nanoseconds.
-    The existing zarr array's attrs (units, calendar) apply to all values including
-    the appended ones, so we don't need to re-state them here.
+
+def _write_s_direct(zstore, group: str, units: str, calendar: str, s_datetimes, offset: int = 0) -> None:
+    """Write S coordinate values directly to zarr as int64 day-offsets.
+
+    Must be called BEFORE the xarray to_zarr call so xarray can't overwrite the values.
+    For append: pre-resize S and write new values, then xarray extends data vars only.
+    For new groups: group must already exist; creates S array here.
     """
     import re
+    import zarr as _zarr_s
     m = re.match(r"days since (.+)", units)
     if not m:
-        return ds
+        logger.warning("_write_s_direct: units %r don't match 'days since ...', skipping", units)
+        return
     epoch = pd.Timestamp(m.group(1).strip())
-    # ds["S"].values here is datetime64[ns] — compute exact integer day offsets.
-    int_days = np.array(
-        [int((pd.Timestamp(v) - epoch) / pd.Timedelta("1D")) for v in ds["S"].values],
+    correct = np.array(
+        [int((pd.Timestamp(v) - epoch) / pd.Timedelta("1D")) for v in s_datetimes],
         dtype=np.int64,
     )
-    ds = ds.assign_coords(S=int_days)
-    ds["S"].attrs = {}      # no CF attrs — prevents xarray from re-encoding
-    ds["S"].encoding = {}   # no encoding — zarr gets raw int64 values directly
-    return ds
+    n_new = len(correct)
+    n_total = offset + n_new
+    logger.info("_write_s_direct: group=%s offset=%d n_new=%d n_total=%d values=%s",
+                group, offset, n_new, n_total, correct.tolist())
+    _wgrp = _zarr_s.open(zstore, mode="a")
+    grp = _wgrp[group]
+    if "S" in grp:
+        _s_arr = grp["S"]
+        logger.info("_write_s_direct: existing S shape=%s attrs=%s", _s_arr.shape, dict(_s_arr.attrs))
+        if _s_arr.shape[0] < n_total:
+            _s_arr.resize((n_total,))
+            logger.info("_write_s_direct: resized S to shape=%s", _s_arr.shape)
+        _s_arr[offset:n_total] = correct
+        logger.info("_write_s_direct: wrote; S[-3:]=%s", list(_s_arr[-3:]))
+    else:
+        _s_arr = grp.create_array("S", shape=(n_total,), dtype=np.int64, chunks=(1,), dimension_names=("S",))
+        _s_arr[offset:n_total] = correct
+        _s_arr.update_attributes({"units": units, "calendar": calendar})
+        logger.info("_write_s_direct: created new S shape=%s values=%s", _s_arr.shape, list(_s_arr[:]))
 
 
 models_to_process = []
@@ -285,13 +304,16 @@ for entry in models_to_process:
                 ds = ds[[variable]]
                 if "S" in ds.coords:
                     s_var = ds["S"]
-                    if np.issubdtype(s_var.dtype, np.integer) and "units" in s_var.attrs:
+                    if (np.issubdtype(s_var.dtype, np.integer) or np.issubdtype(s_var.dtype, np.floating)) and "units" in s_var.attrs:
                         from xarray.coding.times import decode_cf_datetime
-                        decoded = decode_cf_datetime(
-                            s_var.values, s_var.attrs["units"],
-                            s_var.attrs.get("calendar", "standard"),
-                        )
-                        ds = ds.assign_coords(S=pd.DatetimeIndex(decoded))
+                        _cal = s_var.attrs.get("calendar", "standard")
+                        # "360" is a non-standard alias used by some NMME files; map it
+                        if _cal == "360":
+                            _cal = "360_day"
+                        decoded = decode_cf_datetime(s_var.values, s_var.attrs["units"], _cal)
+                        # decode_cf_datetime may return cftime objects for non-standard calendars;
+                        # convert to standard datetime via ISO string truncation
+                        ds = ds.assign_coords(S=pd.DatetimeIndex([pd.Timestamp(str(d)[:10]) for d in decoded]))
                     else:
                         ds["S"] = pd.to_datetime(s_var.values)
                 if (~ds[variable].isel(M=0, L=0).isnull().all(dim=("Y", "X"))).compute().item():
@@ -325,6 +347,30 @@ for entry in models_to_process:
             logger.warning("L size mismatch: new=%d existing=%d — reindexing to existing L", ds_allvars.sizes.get("L", 0), len(existing_L))
             ds_allvars = ds_allvars.reindex(L=existing_L)
 
+    # Pad any existing zarr variables that have no new data with NaN slabs so that
+    # append_dim="S" keeps all variable S-sizes consistent.  Without this, a model
+    # whose h200/h500 files are absent for a given month (e.g. NCEP-CFSv2 202606)
+    # would leave those arrays at S=N while prec/tref/sst grow to S=N+1, making
+    # the group unreadable by xr.open_zarr on the next run.
+    if group_exists:
+        for _evar in existing_vars:
+            if _evar not in ds_allvars.data_vars:
+                try:
+                    _ref = existing_ds[_evar].isel(S=0).drop_vars("S", errors="ignore")
+                    _s_vals = ds_allvars["S"].values
+                    _dims = ("S",) + tuple(_ref.dims)
+                    _nan_shape = (len(_s_vals),) + tuple(ds_allvars.sizes.get(d, _ref.sizes[d]) for d in _ref.dims)
+                    _nan_coords = {"S": _s_vals}
+                    _nan_coords.update({d: (ds_allvars[d].values if d in ds_allvars.coords else existing_ds[d].values) for d in _ref.dims if d in _ref.coords})
+                    ds_allvars[_evar] = xr.DataArray(
+                        np.full(_nan_shape, np.nan, dtype=np.float32),
+                        dims=_dims,
+                        coords=_nan_coords,
+                    )
+                    logger.info("No new data for %s in %s — padding with NaN for new S positions", _evar, group_name)
+                except Exception as _e_pad:
+                    logger.warning("Could not add NaN pad for %s in %s: %s", _evar, group_name, _e_pad)
+
     all_times = pd.Index(ds_allvars["S"].values)
     # Only include missing vars that were actually read into ds_allvars.
     missing_vars = [var for var in entry["variables"] if var not in existing_vars and var in ds_allvars.data_vars]
@@ -338,22 +384,29 @@ for entry in models_to_process:
     write_store = write_session.store
 
     if not group_exists:
-        ds_allvars.chunk({"L": len(ds_allvars["L"]), "Y": len(ds_allvars["Y"]), "X": len(ds_allvars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="w", group=group_name)
+        # Drop S so xarray never writes it; we write S directly in zarr afterwards
+        s_vals = ds_allvars["S"].values
+        ds_allvars.drop_vars("S").chunk({"L": len(ds_allvars["L"]), "Y": len(ds_allvars["Y"]), "X": len(ds_allvars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="w", group=group_name)
+        _write_s_direct(write_store, group_name, _NEW_GROUP_EPOCH, "proleptic_gregorian", s_vals, offset=0)
         write_session.commit(f"Initial write for {group_name}")
         continue
 
     if missing_vars and len(existing_times) > 0:
+        # S is not being extended — write as-is (xarray will preserve existing S encoding)
         subset_missing_vars = ds_allvars[missing_vars].reindex(S=existing_times)
-        if s_units:
-            subset_missing_vars = _encode_s_as_int_days(subset_missing_vars, s_units, s_calendar)
         subset_missing_vars.chunk({"L": len(subset_missing_vars["L"]), "Y": len(subset_missing_vars["Y"]), "X": len(subset_missing_vars["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", group=group_name)
         write_session.commit(f"Add missing variables for {group_name}")
 
     if len(missing_times) > 0 and len(existing_times) > 0:
         subset_missing_times = ds_allvars.reindex(S=missing_times)
-        if s_units:
-            subset_missing_times = _encode_s_as_int_days(subset_missing_times, s_units, s_calendar)
-        subset_missing_times.chunk({"L": len(subset_missing_times["L"]), "Y": len(subset_missing_times["Y"]), "X": len(subset_missing_times["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", append_dim="S", group=group_name)
+        s_new_vals = subset_missing_times["S"].values
+        # Write S to zarr BEFORE xarray's append so xarray can't overwrite the values.
+        # xarray always extends the S coordinate array on append_dim="S" even when S is
+        # dropped from the dataset — so pre-writing is the only way to control the values.
+        _s_units_use = s_units if s_units else _NEW_GROUP_EPOCH
+        _s_cal_use = s_calendar if s_calendar else "proleptic_gregorian"
+        _write_s_direct(write_store, group_name, _s_units_use, _s_cal_use, s_new_vals, offset=len(existing_times))
+        subset_missing_times.drop_vars("S").chunk({"L": len(subset_missing_times["L"]), "Y": len(subset_missing_times["Y"]), "X": len(subset_missing_times["X"]), "M": 1, "S": 1}).to_zarr(write_store, zarr_format=3, consolidated=False, mode="a", append_dim="S", group=group_name)
         write_session.commit(f"Append new init times for {group_name}")
 
 logger.info("Arraylake update complete")
