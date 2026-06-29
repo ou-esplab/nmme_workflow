@@ -88,7 +88,9 @@ def _normalize_hindcast_dims(da: xr.DataArray) -> xr.DataArray:
     return da
 
 
-def _hindcast_root(hindcast_root: Path, model: str, var: str) -> Path:
+def _hindcast_root(hindcast_root: Path, model: str, var: str, use_forecast: bool = False) -> Path:
+    if use_forecast:
+        return hindcast_root / model / "forecast" / var
     if model in SFS_MODELS:
         return hindcast_root / model / "reforecast" / var
     return hindcast_root / model / "hindcast" / var
@@ -135,14 +137,23 @@ def load_hindcast_single_lead_anom(
     lead: int,
     start_year: int,
     end_year: int,
+    use_forecast: bool = False,
 ) -> tuple[xr.DataArray | None, list[int]]:
-    root = _hindcast_root(hindcast_root, model, var)
+    root = _hindcast_root(hindcast_root, model, var, use_forecast)
     clim_path = clim_root / f"{model}.{var}_{lev}.clim.1991-2020.nc"
 
     if not clim_path.exists():
         return None, []
 
     clim = xr.open_dataset(clim_path)[var]
+    # Normalize lat/lon dim names (some clim files use latitude/longitude)
+    _clim_rmap = {}
+    if "latitude" in clim.dims and "lat" not in clim.dims:
+        _clim_rmap["latitude"] = "lat"
+    if "longitude" in clim.dims and "lon" not in clim.dims:
+        _clim_rmap["longitude"] = "lon"
+    if _clim_rmap:
+        clim = clim.rename(_clim_rmap)
     if not pd.api.types.is_integer_dtype(clim["lead"].dtype):
         clim = clim.assign_coords(lead=clim["lead"].astype(int))
     for dim in ("lat", "lon"):
@@ -210,6 +221,7 @@ def load_hindcast_seasonal_anom(
     season_start_lead: int,
     start_year: int,
     end_year: int,
+    use_forecast: bool = False,
 ) -> tuple[xr.DataArray | None, list[int]]:
     """
     Average N_SEASON monthly anomalies starting at season_start_lead.
@@ -219,7 +231,7 @@ def load_hindcast_seasonal_anom(
     for lead in range(season_start_lead, season_start_lead + N_SEASON):
         anoms, years = load_hindcast_single_lead_anom(
             hindcast_root, clim_root, model, var, lev,
-            init_month, lead, start_year, end_year,
+            init_month, lead, start_year, end_year, use_forecast,
         )
         if anoms is None:
             return None, []
@@ -332,7 +344,7 @@ def compute_acc(
         return None
 
     common = sorted(set(anoms["year"].values.tolist()) & set(obs_init_years))
-    if len(common) < 5:
+    if len(common) < 1:
         return None
 
     hc_emean = anoms.sel(year=common).mean("member")   # (year, lat, lon)
@@ -362,22 +374,26 @@ def _acc_for_model(
     max_lead: int,
     start_year: int,
     end_year: int,
-) -> xr.DataArray | None:
+    use_forecast: bool = False,
+) -> tuple[xr.DataArray | None, list[int]]:
     ref_lat: np.ndarray | None = None
     ref_lon: np.ndarray | None = None
 
     acc_by_init: dict[int, xr.DataArray] = {}
+    all_years: set[int] = set()
 
     for init_month in range(1, 13):
         acc_by_season: dict[int, xr.DataArray] = {}
 
         for season_start_lead in range(1, max_lead - N_SEASON + 2):
-            anoms, _ = load_hindcast_seasonal_anom(
+            anoms, years = load_hindcast_seasonal_anom(
                 hindcast_root, clim_root, model, var, lev,
-                init_month, season_start_lead, start_year, end_year,
+                init_month, season_start_lead, start_year, end_year, use_forecast,
             )
-            if anoms is None or anoms.sizes["year"] < 5:
+            if anoms is None or anoms.sizes["year"] < 1:
                 continue
+
+            all_years.update(years)
 
             if ref_lat is None:
                 ref_lat = anoms["lat"].values
@@ -399,12 +415,12 @@ def _acc_for_model(
             acc_by_init[init_month] = acc_init
 
     if not acc_by_init:
-        return None
+        return None, []
 
     inits   = sorted(acc_by_init.keys())
     acc_all = xr.concat([acc_by_init[i] for i in inits], dim="init_month")
     acc_all = acc_all.assign_coords(init_month=("init_month", inits))
-    return acc_all
+    return acc_all, sorted(all_years)
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +444,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-lead",   type=int, default=9)
     p.add_argument("--models",     default="ALL")
     p.add_argument("--overwrite",  action="store_true")
+    p.add_argument("--forecast",   action="store_true",
+                   help="Use operational forecast data (forecast/) instead of hindcast/reforecast")
     return p.parse_args()
 
 
@@ -479,10 +497,10 @@ def main() -> int:
             print(f"[SKIP] {out_path.name}")
             continue
 
-        acc_all = _acc_for_model(
+        acc_all, actual_years = _acc_for_model(
             model, var, lev,
             hindcast_root, clim_root, obs_da,
-            args.max_lead, args.start_year, args.end_year,
+            args.max_lead, args.start_year, args.end_year, args.forecast,
         )
         if acc_all is None:
             print(f"[SKIP] No data for {model}")
@@ -491,6 +509,9 @@ def main() -> int:
         acc_all.attrs.update({
             "model": model, "var": var,
             "period": f"{args.start_year}-{args.end_year}",
+            "actual_start_year": actual_years[0] if actual_years else args.start_year,
+            "actual_end_year": actual_years[-1] if actual_years else args.end_year,
+            "n_years": len(set(actual_years)),
             "long_name": "Anomaly Correlation Coefficient",
             "valid_range": "-1 to 1 (positive = skilful)",
             "season_def": f"{N_SEASON}-month seasonal means",
@@ -516,6 +537,7 @@ def main() -> int:
     else:
         ref_lat = ref_lon = None
         acc_by_init_mme: dict[int, xr.DataArray] = {}
+        mme_all_years: set[int] = set()
 
         for init_month in range(1, 13):
             acc_by_season_mme: dict[int, xr.DataArray] = {}
@@ -528,7 +550,7 @@ def main() -> int:
                     anoms, fcst_years = load_hindcast_seasonal_anom(
                         hindcast_root, clim_root, model, var, lev,
                         init_month, season_start_lead,
-                        args.start_year, args.end_year,
+                        args.start_year, args.end_year, args.forecast,
                     )
                     if anoms is None:
                         continue
@@ -545,10 +567,11 @@ def main() -> int:
                         else common_years_all & yr_set
                     model_emeans.append(anoms.mean("member"))
 
-                if not model_emeans or not common_years_all or len(common_years_all) < 5:
+                if not model_emeans or not common_years_all or len(common_years_all) < 1:
                     continue
 
                 common_years = sorted(common_years_all)
+                mme_all_years.update(common_years)
 
                 # Average ensemble means across models → one combined mean
                 mme_emean = xr.concat(
@@ -564,7 +587,7 @@ def main() -> int:
                     continue
 
                 common2 = sorted(set(common_years) & set(obs_init_years))
-                if len(common2) < 5:
+                if len(common2) < 1:
                     continue
 
                 obs_interp = obs_seasonal.sel(year=common2).interp(
@@ -592,6 +615,9 @@ def main() -> int:
             acc_all.attrs.update({
                 "model": "MME", "var": var,
                 "period": f"{args.start_year}-{args.end_year}",
+                "actual_start_year": min(mme_all_years) if mme_all_years else args.start_year,
+                "actual_end_year": max(mme_all_years) if mme_all_years else args.end_year,
+                "n_years": len(mme_all_years),
                 "models_included": ",".join(mme_source_models),
                 "long_name": "Anomaly Correlation Coefficient",
                 "valid_range": "-1 to 1 (positive = skilful)",

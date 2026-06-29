@@ -24,6 +24,7 @@ import numpy as np
 import xarray as xr
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from cartopy.util import add_cyclic_point
 
 SKILLDIR_DEFAULT = "/data/esplab/shared/model/initialized/nmme/skill/1991-2020"
 OUTDIR_DEFAULT   = "/data/esplab/shared/model/initialized/nmme/skill/1991-2020/plots"
@@ -71,12 +72,22 @@ CMAP   = "RdBu_r"
 NORM   = TwoSlopeNorm(vmin=VMIN, vcenter=0.0, vmax=VMAX)
 
 
-def _to_180(da: xr.DataArray) -> xr.DataArray:
-    """Convert 0-360 longitude to -180..180 for cartopy PlateCarree."""
-    lon = da["lon"]
-    if float(lon.max()) > 180:
-        da = da.assign_coords(lon=((lon + 180) % 360 - 180)).sortby("lon")
-    return da
+def _to_crs180(da: xr.DataArray) -> tuple:
+    """Convert geographic lons to PlateCarree(central_longitude=180) coords.
+
+    Returns (data_cyc, lon_cyc, lat) ready for contourf with that transform.
+    The CRS seam falls at geographic 0° (prime meridian = center of Robinson),
+    so the dateline at geographic 180° is in the middle of the data range—no gap.
+    """
+    lon_geo = da["lon"].values
+    if float(lon_geo.min()) < 0:
+        lon_geo = (lon_geo + 360) % 360
+    lon_crs = lon_geo - 180
+    idx = np.argsort(lon_crs)
+    lon_crs = lon_crs[idx]
+    data_sorted = da.values[:, idx]
+    data_cyc, lon_cyc = add_cyclic_point(data_sorted, coord=lon_crs)
+    return data_cyc, lon_cyc, da["lat"].values
 
 
 def _load_model(skilldir: Path, model: str, var: str) -> xr.DataArray | None:
@@ -87,23 +98,26 @@ def _load_model(skilldir: Path, model: str, var: str) -> xr.DataArray | None:
     return ds["acc"]
 
 
-def _plot_panel(ax, da: xr.DataArray, title: str, lat_extent: tuple) -> object:
+def _plot_panel(ax, da: xr.DataArray, title: str, lat_extent: tuple, var: str = "") -> object:
     """Draw one ACC panel on ax; return the mappable."""
-    transform = ccrs.PlateCarree()
-    da_180 = _to_180(da)
-
-    m = ax.pcolormesh(
-        da_180["lon"].values,
-        da_180["lat"].values,
-        da_180.values,
+    data_cyc, lon_cyc, lat = _to_crs180(da)
+    levels = np.linspace(VMIN, VMAX, 21)
+    m = ax.contourf(
+        lon_cyc, lat, data_cyc,
+        levels=levels,
         cmap=CMAP,
         norm=NORM,
-        transform=transform,
-        shading="auto",
+        transform=ccrs.PlateCarree(central_longitude=180),
+        extend="both",
     )
-    ax.set_extent([-180, 180, lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
-    # Overlay ocean and land borders on top so NaN ocean stays white/gray
-    ax.add_feature(cfeature.OCEAN, zorder=1, facecolor="0.85")
+    if lat_extent == (-90, 90):
+        ax.set_global()
+    else:
+        ax.set_extent([-180, 180, lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
+    if var == "sst":
+        ax.add_feature(cfeature.LAND, zorder=1, facecolor="0.85")
+    else:
+        ax.add_feature(cfeature.OCEAN, zorder=1, facecolor="0.85")
     ax.coastlines(linewidth=0.5, color="0.3", zorder=2)
     ax.add_feature(cfeature.BORDERS, linewidth=0.3, edgecolor="0.4", zorder=2)
     ax.set_title(title, fontsize=8)
@@ -196,7 +210,7 @@ def main() -> int:
     mappable = None
     for i, (model, slice2d) in enumerate(panels):
         ax = axes_flat[i]
-        mappable = _plot_panel(ax, slice2d, model, lat_extent)
+        mappable = _plot_panel(ax, slice2d, model, lat_extent, var=args.var)
 
     # Hide unused axes
     for j in range(len(panels), len(axes_flat)):
