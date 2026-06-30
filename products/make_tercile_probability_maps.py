@@ -66,6 +66,7 @@ SEASON_MONTHS: Dict[str, Tuple[int, ...]] = {
     "JJA":     (6, 7, 8),
     "ASO":     (8, 9, 10),
     "NDJ":     (11, 12, 1),
+    "DJF":     (12, 1, 2),
     "Apr-Jul": (4, 5, 6, 7),
     "Apr-Sep": (4, 5, 6, 7, 8, 9),
     "Oct-Jan": (10, 11, 12, 1),
@@ -113,7 +114,7 @@ def parse_args() -> argparse.Namespace:
         default="ALL",
         help=(
             "Comma-separated seasons from "
-            "{MAM,AMJ,MJJ,JJA,ASO,NDJ}; "
+            "{MAM,AMJ,MJJ,JJA,ASO,NDJ,DJF}; "
             "use ALL for all"
         ),
     )

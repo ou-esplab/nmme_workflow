@@ -23,6 +23,22 @@ from make_tercile_probability_maps import (
     MODEL_DIR_MAP, SEASON_LEADS, to_0360, subset_region
 )
 
+
+def _normalize_latlon(da):
+    """Rename latitude/longitude or Y/X dims to lat/lon, matching the
+    normalization already applied to forecast data, so arithmetic between
+    forecast and climatology arrays aligns instead of broadcasting."""
+    ren = {}
+    if "latitude" in da.dims or "latitude" in da.coords:
+        ren["latitude"] = "lat"
+    if "longitude" in da.dims or "longitude" in da.coords:
+        ren["longitude"] = "lon"
+    if "Y" in da.dims or "Y" in da.coords:
+        ren["Y"] = "lat"
+    if "X" in da.dims or "X" in da.coords:
+        ren["X"] = "lon"
+    return da.rename(ren) if ren else da
+
 def main():
     parser = argparse.ArgumentParser(description="Precompute tercile thresholds for all models/regions/seasons.")
     parser.add_argument("--config", default="confignmme.yaml", help="Path to config YAML")
@@ -63,7 +79,7 @@ def main():
                     continue
                 # Set up paths and file patterns
                 if model_name == "NOAA-SFS":
-                    root = sfs_hindcast_root
+                    root = sfs_hindcast_root / var
                 else:
                     root = hind_root / MODEL_DIR_MAP.get(model_name, model_name) / "hindcast" / var
                 # Find all files for this model/var/season
@@ -153,7 +169,7 @@ def main():
                         # Always include underscore before .clim, even if lev is empty
                         clim_path = clim_root / f"{model_name}.{clim_file_var}_{clim_lev}.clim.1991-2020.nc"
                         clim = xr.open_dataset(str(clim_path))
-                        clim_da = clim[clim_var]
+                        clim_da = _normalize_latlon(clim[clim_var])
                         # Normalize lead and month dims
                         if "lead" in clim_da.dims and not pd.api.types.is_integer_dtype(clim_da["lead"].dtype):
                             clim_da = clim_da.assign_coords(lead=clim_da["lead"].astype(int))
@@ -176,13 +192,9 @@ def main():
                         # Always include underscore before .clim, even if lev is empty
                         clim_path = clim_root / f"{model_name}.{clim_file_var}_{clim_lev}.clim.1991-2020.nc"
                         clim = xr.open_dataset(str(clim_path))
-                        clim_da = clim[clim_var]
+                        clim_da = _normalize_latlon(clim[clim_var])
                         if "month" in clim_da.dims:
                             clim_da = clim_da.sel(month=month)
-                        if "lon" in clim_da.dims or "lon" in clim_da.coords:
-                            clim_da = clim_da.rename({"lon": "lon"})
-                        if "lat" in clim_da.dims or "lat" in clim_da.coords:
-                            clim_da = clim_da.rename({"lat": "lat"})
                         da = da - clim_da
                         if "ens" in da.dims:
                             da = da.rename({"ens": "sample"})

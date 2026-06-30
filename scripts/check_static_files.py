@@ -69,6 +69,7 @@ def main():
             "JJA": (3, 6),
             "ASO": (7, 10),
             "NDJ": (8, 11),
+            "DJF": (9, 12),
         }
         
         check_climatology = args.climatology_root is not None

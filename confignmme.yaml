@@ -24,31 +24,31 @@ regions:
   - name: CONUS
     lat: [24, 50]
     lon: [-125, -66]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 262.5, mproj: pcarree, state_colors: k}
 
   - name: Mexico
     lat: [20, 33]
     lon: [-118, -97]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 252.5, mproj: pcarree, state_colors: gray}
 
   - name: Iran
     lat: [24, 40]
     lon: [40, 64]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 52, mproj: pcarree, state_colors: gray}
 
   - name: Venezuela
     lat: [0, 13]
     lon: [-73, -60]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 293.5, mproj: pcarree, state_colors: gray}
 
   - name: C.Asia
     lat: [28.39, 55.55]
     lon: [45.53, 88.33]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 67, mproj: pcarree, state_colors: gray}
 
 # ------------------------------------------------------------
