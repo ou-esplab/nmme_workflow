@@ -42,6 +42,11 @@ def parse_args():
     p.add_argument("--system", required=True, choices=["nmme", "subx"])
     p.add_argument("--config", required=True)
     p.add_argument("--init", required=True, help="Init date YYYYMM")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run validation/transform logic but skip writing NetCDF output",
+    )
     return p.parse_args()
 
 def finalize_preprocess_schema(ds: xr.Dataset) -> xr.Dataset:
@@ -491,8 +496,6 @@ def main() -> int:
                 / "forecast"
                 / var
             )
-            out_dir.mkdir(parents=True, exist_ok=True)
-
             outfile = out_dir / f"{var}_{model}_{init_year}_{init_month}.nc"
             # Rebuild dataset to ensure NetCDF dimension definitions
             # are created in canonical order (member, lead, lat, lon).
@@ -534,9 +537,12 @@ def main() -> int:
                 # Fallback to original dataset if reconstruction fails
                 ds_to_write = ds
 
-            ds_to_write.to_netcdf(outfile)
-
-            print(f"[PREPROCESS][WRITE] {outfile}")
+            if args.dry_run:
+                print(f"[PREPROCESS][DRY-RUN] would write {outfile}")
+            else:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                ds_to_write.to_netcdf(outfile)
+                print(f"[PREPROCESS][WRITE] {outfile}")
 
     print("[PREPROCESS] ✅ Preprocess completed successfully")
     return 0

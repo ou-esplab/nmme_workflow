@@ -284,21 +284,25 @@ PY
         chmod 775 "$f" 2>/dev/null || true
     done
 
-  {
-    echo "s3_reforecast_root=${S3_REFORECAST_ROOT}"
-    echo "zarr_dataset=${ZARR_DATASET}"
-    echo "remote_var=${REMOTE_VAR}"
-    echo "months=${MONTHS}"
-    echo "start_year=${START_YEAR}"
-    echo "end_year=${END_YEAR}"
-    echo "dry_run=${DRY_RUN}"
-    echo "max_downloads=${MAX_DOWNLOADS}"
-    echo "local_layout=${OUTDIR}"
-    echo "filename_pattern=${LOCAL_VAR}_${MODEL}_YYYY_MM.nc"
-    echo "completed_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  } > "$MANIFEST"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "[DRY RUN] would write manifest: ${MANIFEST}"
+  else
+    {
+      echo "s3_reforecast_root=${S3_REFORECAST_ROOT}"
+      echo "zarr_dataset=${ZARR_DATASET}"
+      echo "remote_var=${REMOTE_VAR}"
+      echo "months=${MONTHS}"
+      echo "start_year=${START_YEAR}"
+      echo "end_year=${END_YEAR}"
+      echo "dry_run=${DRY_RUN}"
+      echo "max_downloads=${MAX_DOWNLOADS}"
+      echo "local_layout=${OUTDIR}"
+      echo "filename_pattern=${LOCAL_VAR}_${MODEL}_YYYY_MM.nc"
+      echo "completed_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    } > "$MANIFEST"
 
-  log "Manifest: ${MANIFEST}"
+    log "Manifest: ${MANIFEST}"
+  fi
 }
 
 main "$@"

@@ -10,9 +10,13 @@
 #   -c, --config FILE     Path to config YAML (default: confignmme.yaml)
 #   -e, --env    NAME     Conda environment name (default: nmme_workflow_env)
 #       --conda-base DIR  Path to miniconda/anaconda root (default: ~/miniconda3)
+#   -n, --dry-run         Full pipeline dry run: no downloads, no NetCDF writes,
+#                         no Arraylake commits, no SSH/SCP. Passes
+#                         --ingest-dry-run --preprocess-dry-run --products-dry-run
+#                         --arraylake-dry-run --publish-dry-run to runners/cli.py.
 #   -h, --help            Show this help
 #
-# Options override environment variables (NMME_STAGES, NMME_INIT, NMME_CONFIG, ENV_NAME, CONDA_BASE).
+# Options override environment variables (NMME_STAGES, NMME_INIT, NMME_CONFIG, ENV_NAME, CONDA_BASE, NMME_DRY_RUN).
 
 set -euo pipefail
 
@@ -27,6 +31,7 @@ STAGES="${NMME_STAGES:-ingest preprocess products publish arraylake}"
 CONDA_BASE="${CONDA_BASE:-$HOME/miniconda3}"
 ENV_NAME="${ENV_NAME:-nmme_workflow_env}"
 INIT_ARG="${NMME_INIT:-}"
+DRY_RUN="${NMME_DRY_RUN:-0}"
 
 # ---- Parse CLI arguments (override env vars) --------------------------------
 usage() {
@@ -41,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         -c|--config)    CONFIG="$2";    shift 2 ;;
         -e|--env)       ENV_NAME="$2";  shift 2 ;;
         --conda-base)   CONDA_BASE="$2"; shift 2 ;;
+        -n|--dry-run)   DRY_RUN=1;       shift ;;
         -h|--help)      usage ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
@@ -100,12 +106,18 @@ fi
 
 # ---- Run workflow -----------------------------------------------------------
 log "[INFO] Running stages: $STAGES"
+DRY_RUN_FLAGS=()
+if [[ "$DRY_RUN" == "1" ]]; then
+    log "[INFO] DRY RUN mode: no downloads, no NetCDF writes, no Arraylake commits, no SSH/SCP."
+    DRY_RUN_FLAGS=(--ingest-dry-run --preprocess-dry-run --products-dry-run --arraylake-dry-run --publish-dry-run)
+fi
 # shellcheck disable=SC2086
 conda run --no-capture-output -n "$ENV_NAME" \
     python3 "$ROOT_DIR/runners/cli.py" \
     --system nmme \
     --config "$CONFIG" \
     --init "$INIT_DATE" \
-    --stages $STAGES
+    --stages $STAGES \
+    "${DRY_RUN_FLAGS[@]}"
 
 log "==> NMME cron run complete."

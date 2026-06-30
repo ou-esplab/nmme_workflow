@@ -64,6 +64,16 @@ def main() -> int:
         help="Run products stage without writing plots or NetCDF output",
     )
     p.add_argument(
+        "--ingest-dry-run",
+        action="store_true",
+        help="Run ingest stage without network downloads or NetCDF writes",
+    )
+    p.add_argument(
+        "--preprocess-dry-run",
+        action="store_true",
+        help="Run preprocess stage without writing NetCDF output",
+    )
+    p.add_argument(
         "--arraylake-dry-run",
         action="store_true",
         help="Run arraylake stage in scan-only mode without writing to Arraylake",
@@ -261,10 +271,11 @@ def main() -> int:
     if "ingest" in args.stages:
         cfg_q = shlex.quote(args.config)
         init_q = shlex.quote(init_str)
+        dry_prefix = "DRY_RUN=1 " if args.ingest_dry_run else ""
         stage_cmds["ingest"] = [
             "bash",
             "-lc",
-            f"NMME_CONFIG={cfg_q} INIT_YYYYMM={init_q} ingest/nmme_update_fcsts.sh",
+            f"{dry_prefix}NMME_CONFIG={cfg_q} INIT_YYYYMM={init_q} ingest/nmme_update_fcsts.sh",
         ]
 
     # ---------- Preprocess (new, thin by design) ----------
@@ -279,6 +290,8 @@ def main() -> int:
             "--init",
             init_str,
         ]
+        if args.preprocess_dry_run:
+            stage_cmds["preprocess"].append("--dry-run")
 
     # ---------- Products ----------
     if "products" in args.stages:

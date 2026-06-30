@@ -18,6 +18,9 @@ RECENT_MONTHS=${RECENT_MONTHS:-1}
 # Minimal bytes to accept a NetCDF as valid
 MIN_BYTES=${MIN_BYTES:-4096}
 
+# Top-level dry run: skip all real downloads/writes, force SFS sub-scripts dry too
+DRY_RUN="${DRY_RUN:-0}"
+
 # Root for downloads
 DATA_ROOT="${DATA_ROOT:-/data/esplab/nmme-backup}"
 
@@ -117,6 +120,13 @@ SFS_CLIMO_INPUT_DIR="${SFS_CLIMO_INPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_input_
 SFS_CLIMO_OUTPUT_DIR="${SFS_CLIMO_OUTPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_output_dir' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
 SFS_CLIMO_START_YEAR="${SFS_CLIMO_START_YEAR:-$(cfg_get 'pipeline.sfs.climo_start_year' '1991')}"
 SFS_CLIMO_END_YEAR="${SFS_CLIMO_END_YEAR:-$(cfg_get 'pipeline.sfs.climo_end_year' '2020')}"
+
+# A top-level DRY_RUN overrides/short-circuits the config-driven SFS toggles
+# so a full pipeline dry run engages SFS dry-run without separate config edits.
+if [[ "$DRY_RUN" == "1" ]]; then
+  SFS_AWS_DRY_RUN=1
+  SFS_REFORECAST_DRY_RUN=1
+fi
 
 # Forecast file normalization
 NMME_NORMALIZE_PYTHON="${NMME_NORMALIZE_PYTHON:-python3}"
@@ -362,6 +372,13 @@ for model in "${!MODELURL[@]}"; do
         continue
       fi
 
+      if [[ "$DRY_RUN" == "1" ]]; then
+        url="$(build_url "$model" "$var" "$y" "$m")"
+        log "[DRY RUN] would download [$var] $url -> $outfile"
+        model_attempted=$((model_attempted+1))
+        continue
+      fi
+
       mkdir -p "$outdir"
       chgrp esplab "$outdir" 2>/dev/null || true
       chmod 775 "$outdir" 2>/dev/null || true
@@ -463,32 +480,36 @@ else
 fi
 
 if [[ "$SFS_CLIMO_ENABLED" == "1" ]]; then
-  log "SFS : refreshing climatology from local reforecast (vars: ${SFS_VARS})"
-  if [[ ! -f "$SFS_CLIMO_SCRIPT" ]]; then
-    log "SFS : WARN climo script not found: ${SFS_CLIMO_SCRIPT}; continuing"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "SFS : [DRY RUN] would refresh climatology from local reforecast (vars: ${SFS_VARS}); skipping invocation of ${SFS_CLIMO_SCRIPT}"
   else
-    for sfs_var in $SFS_VARS; do
-      case "$sfs_var" in
-        tref) sfs_lev="2m" ;;
-        *) sfs_lev="sfc" ;;
-      esac
-      sfs_verbose_arg=()
-      if [[ "$SFS_SCRIPT_VERBOSE" == "1" ]]; then
-        sfs_verbose_arg+=("--verbose")
-      fi
-      sfs_in_dir="${DATA_ROOT}/NOAA-SFS/reforecast/${sfs_var}"
-      sfs_out_file="${SFS_CLIMO_OUTPUT_DIR}/NOAA-SFS.${sfs_var}_${sfs_lev}.clim.1991-2020.nc"
-      if ! PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" "$SFS_CLIMO_PYTHON" "$SFS_CLIMO_SCRIPT" \
-        --model "NOAA-SFS" \
-        --local-var "$sfs_var" \
-        --input-dir "$sfs_in_dir" \
-        --output-file "$sfs_out_file" \
-        --start-year "$SFS_CLIMO_START_YEAR" \
-        --end-year "$SFS_CLIMO_END_YEAR" \
-        "${sfs_verbose_arg[@]}"; then
-        log "SFS : WARN climo refresh failed var=${sfs_var}; continuing"
-      fi
-    done
+    log "SFS : refreshing climatology from local reforecast (vars: ${SFS_VARS})"
+    if [[ ! -f "$SFS_CLIMO_SCRIPT" ]]; then
+      log "SFS : WARN climo script not found: ${SFS_CLIMO_SCRIPT}; continuing"
+    else
+      for sfs_var in $SFS_VARS; do
+        case "$sfs_var" in
+          tref) sfs_lev="2m" ;;
+          *) sfs_lev="sfc" ;;
+        esac
+        sfs_verbose_arg=()
+        if [[ "$SFS_SCRIPT_VERBOSE" == "1" ]]; then
+          sfs_verbose_arg+=("--verbose")
+        fi
+        sfs_in_dir="${DATA_ROOT}/NOAA-SFS/reforecast/${sfs_var}"
+        sfs_out_file="${SFS_CLIMO_OUTPUT_DIR}/NOAA-SFS.${sfs_var}_${sfs_lev}.clim.1991-2020.nc"
+        if ! PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" "$SFS_CLIMO_PYTHON" "$SFS_CLIMO_SCRIPT" \
+          --model "NOAA-SFS" \
+          --local-var "$sfs_var" \
+          --input-dir "$sfs_in_dir" \
+          --output-file "$sfs_out_file" \
+          --start-year "$SFS_CLIMO_START_YEAR" \
+          --end-year "$SFS_CLIMO_END_YEAR" \
+          "${sfs_verbose_arg[@]}"; then
+          log "SFS : WARN climo refresh failed var=${sfs_var}; continuing"
+        fi
+      done
+    fi
   fi
 else
   log "SFS : climo refresh disabled (set SFS_CLIMO_ENABLED=1 to enable)"
