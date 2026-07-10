@@ -65,6 +65,16 @@ PREFERRED_ORDER = [
     "MME",
 ]
 
+# Region bounds: (lat_min, lat_max, lon_display_min, lon_display_max, lon360_min, lon360_max)
+# lon_display uses -180/180; lon360 used to subset the 0-360 raw skill files.
+REGION_BOUNDS = {
+    "CONUS":     (24,     50,     -125,   -66,  235,  294),
+    "Mexico":    (20,     33,     -118,   -97,  242,  263),
+    "Iran":      (24,     40,       40,    64,   40,   64),
+    "Venezuela": ( 0,     13,      -73,   -60,  287,  300),
+    "C.Asia":    (28.39,  55.55,   45.53, 88.33, 45.53, 88.33),
+}
+
 # Diverging colormap: 0 = climatology, positive = skilful, negative = unskillful
 VMIN   = -0.5
 VMAX   =  0.5
@@ -89,6 +99,26 @@ def _to_crs180(da: xr.DataArray) -> tuple:
     data_sorted = da.values[:, idx]
     data_cyc, lon_cyc = add_cyclic_point(data_sorted, coord=lon_crs)
     return data_cyc, lon_cyc, da["lat"].values
+
+
+def _plot_panel_regional(ax, da: xr.DataArray, title: str, extent: list) -> object:
+    """Draw one RPSS panel on a PlateCarree regional map."""
+    lon = da["lon"].values
+    lon = np.where(lon > 180, lon - 360, lon)   # 0-360 → -180/180 for display
+    lat = da["lat"].values
+    idx = np.argsort(lon)
+    LON, LAT = np.meshgrid(lon[idx], lat)
+    data = da.values[:, idx]
+    levels = np.linspace(VMIN, VMAX, 21)
+    m = ax.contourf(LON, LAT, data, levels=levels, cmap=CMAP, norm=NORM,
+                    transform=ccrs.PlateCarree(), extend="both")
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.OCEAN, zorder=1, facecolor="0.85")
+    ax.coastlines(linewidth=0.5, color="0.3", zorder=2)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.3, edgecolor="0.4", zorder=2)
+    ax.add_feature(cfeature.STATES, linewidth=0.2, edgecolor="0.5", zorder=2)
+    ax.set_title(title, fontsize=8)
+    return m
 
 
 def _load_model(skilldir: Path, model: str, var: str) -> xr.DataArray | None:
@@ -139,6 +169,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--outdir",     default=OUTDIR_DEFAULT)
     p.add_argument("--models",     default="ALL",
                    help="Comma-separated list, or ALL")
+    p.add_argument("--region",     default=None,
+                   choices=list(REGION_BOUNDS.keys()),
+                   help="Subset to region; saves under outdir/regional/")
     p.add_argument("--show",       action="store_true",
                    help="Display figure interactively (requires a display)")
     return p.parse_args()
@@ -180,6 +213,12 @@ def main() -> int:
             print(f"[SKIP] {model}: season_lead={args.season_lead} not in file")
             continue
         slice2d = da.sel(init_month=args.init_month, season_lead=args.season_lead).squeeze()
+        if args.region:
+            lat_min, lat_max, _, _, lon360_min, lon360_max = REGION_BOUNDS[args.region]
+            slice2d = slice2d.sel(
+                lat=slice2d.lat[(slice2d.lat >= lat_min) & (slice2d.lat <= lat_max)],
+                lon=slice2d.lon[(slice2d.lon >= lon360_min) & (slice2d.lon <= lon360_max)],
+            )
         panels.append((model, slice2d))
 
     if not panels:
@@ -192,26 +231,41 @@ def main() -> int:
 
     season_lbl = _season_label(args.init_month, args.season_lead)
     var_label  = VAR_LABEL.get(args.var, args.var)
-    suptitle   = (
-        f"RPSS  |  {var_label}  |  "
-        f"Init: {MONTH_NAMES[args.init_month - 1]}  "
-        f"Season: {season_lbl}"
-    )
 
-    proj = ccrs.Robinson()
-    fig, axes = plt.subplots(
-        nrows, ncols,
-        figsize=(6 * ncols, 3.2 * nrows + 1.0),
-        subplot_kw={"projection": proj},
-    )
-    axes_flat = np.array(axes).flatten()
-
-    lat_extent = VAR_LAT_EXTENT.get(args.var, (-90, 90))
-
-    mappable = None
-    for i, (model, slice2d) in enumerate(panels):
-        ax = axes_flat[i]
-        mappable = _plot_panel(ax, slice2d, model, lat_extent, var=args.var)
+    if args.region:
+        suptitle = (
+            f"RPSS  |  {var_label}  |  {args.region}  |  "
+            f"Init: {MONTH_NAMES[args.init_month - 1]}  Season: {season_lbl}"
+        )
+        lat_min, lat_max, lon_dmin, lon_dmax, *_ = REGION_BOUNDS[args.region]
+        extent = [lon_dmin, lon_dmax, lat_min, lat_max]
+        proj = ccrs.PlateCarree()
+        fig, axes = plt.subplots(
+            nrows, ncols,
+            figsize=(5 * ncols, 3.5 * nrows + 1.0),
+            subplot_kw={"projection": proj},
+        )
+        axes_flat = np.array(axes).flatten()
+        mappable = None
+        for i, (model, slice2d) in enumerate(panels):
+            mappable = _plot_panel_regional(axes_flat[i], slice2d, model, extent)
+    else:
+        suptitle = (
+            f"RPSS  |  {var_label}  |  "
+            f"Init: {MONTH_NAMES[args.init_month - 1]}  "
+            f"Season: {season_lbl}"
+        )
+        proj = ccrs.Robinson()
+        fig, axes = plt.subplots(
+            nrows, ncols,
+            figsize=(6 * ncols, 3.2 * nrows + 1.0),
+            subplot_kw={"projection": proj},
+        )
+        axes_flat = np.array(axes).flatten()
+        lat_extent = VAR_LAT_EXTENT.get(args.var, (-90, 90))
+        mappable = None
+        for i, (model, slice2d) in enumerate(panels):
+            mappable = _plot_panel(axes_flat[i], slice2d, model, lat_extent, var=args.var)
 
     # Hide unused axes
     for j in range(len(panels), len(axes_flat)):
@@ -231,10 +285,14 @@ def main() -> int:
         cbar.set_label("RPSS", fontsize=10)
         cbar.ax.tick_params(labelsize=8)
 
-    outname = (
-        f"rpss_{args.var}_init{args.init_month:02d}_{season_lbl}.png"
-    )
-    outpath = outdir / outname
+    if args.region:
+        plot_outdir = outdir / "regional"
+        outname = f"rpss_{args.var}_{args.region}_init{args.init_month:02d}_{season_lbl}.png"
+    else:
+        plot_outdir = outdir
+        outname = f"rpss_{args.var}_init{args.init_month:02d}_{season_lbl}.png"
+    plot_outdir.mkdir(parents=True, exist_ok=True)
+    outpath = plot_outdir / outname
     fig.savefig(outpath, dpi=150, bbox_inches="tight")
     print(f"[SAVED] {outpath}")
 
