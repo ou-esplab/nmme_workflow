@@ -60,13 +60,20 @@ TERCILE_FORECAST_VARS = ("prec", "tref")
 # Lead windows are computed dynamically from init month.
 # Seasons may span any number of consecutive months, including year boundaries.
 SEASON_MONTHS: Dict[str, Tuple[int, ...]] = {
+    # All 12 sliding 3-month seasons
+    "JFM":     (1, 2, 3),
+    "FMA":     (2, 3, 4),
     "MAM":     (3, 4, 5),
     "AMJ":     (4, 5, 6),
     "MJJ":     (5, 6, 7),
     "JJA":     (6, 7, 8),
+    "JAS":     (7, 8, 9),
     "ASO":     (8, 9, 10),
+    "SON":     (9, 10, 11),
+    "OND":     (10, 11, 12),
     "NDJ":     (11, 12, 1),
     "DJF":     (12, 1, 2),
+    # Extended seasons
     "Apr-Jul": (4, 5, 6, 7),
     "Apr-Sep": (4, 5, 6, 7, 8, 9),
     "Oct-Jan": (10, 11, 12, 1),

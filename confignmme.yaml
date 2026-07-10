@@ -24,31 +24,31 @@ regions:
   - name: CONUS
     lat: [24, 50]
     lon: [-125, -66]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF, Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 262.5, mproj: pcarree, state_colors: k}
 
   - name: Mexico
     lat: [20, 33]
     lon: [-118, -97]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF, Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 252.5, mproj: pcarree, state_colors: gray}
 
   - name: Iran
     lat: [24, 40]
     lon: [40, 64]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF, Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 52, mproj: pcarree, state_colors: gray}
 
   - name: Venezuela
     lat: [0, 13]
     lon: [-73, -60]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF, Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 293.5, mproj: pcarree, state_colors: gray}
 
   - name: C.Asia
     lat: [28.39, 55.55]
     lon: [45.53, 88.33]
-    seasons: [MAM, AMJ, MJJ, JJA, ASO, NDJ, DJF,Apr-Jul, Apr-Sep, Oct-Jan]
+    seasons: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF, Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 67, mproj: pcarree, state_colors: gray}
 
 # ------------------------------------------------------------
@@ -150,7 +150,15 @@ pipeline:
   sfs:
     enabled: true
     dry_run: false
-    variables: "prec tref sst u10m v10m ssu ssv"
+    # Legacy fallback key used when scoped lists below are not set.
+    variables: "prec tref sst"
+    # Realtime/latest forecast ingest scope (keep conservative for ops).
+    forecast_variables: "prec tref sst"
+    # Realtime pipeline reforecast sync scope (keep core vars only).
+    reforecast_variables: "prec tref sst"
+    # Coupling-diagnostics hindcast vars for standalone backfill script.
+    # Core vars (prec/tref/sst) are audited separately as check-only.
+    coupling_reforecast_variables: "olr u10 v10 shf lhf tau_x tau_y sw_down lw_down ssh sss ohc"
     reforecast_enabled: true
     reforecast_dry_run: false
     reforecast_script: ./ingest/download_sfs_reforecast_prec.sh
@@ -160,6 +168,8 @@ pipeline:
     reforecast_end_year: 2100
     reforecast_max_downloads: 0
     climo_enabled: true
+    # Keep climo refresh limited to core vars for now.
+    climo_variables: "prec tref sst"
     climo_python: /home/kpegion/miniconda3/envs/nmme_workflow_env/bin/python3
     climo_script: ./static/make_sfs_climo_from_reforecast.py
     climo_input_dir: /data/esplab/nmme-backup/NOAA-SFS/reforecast  # base dir; per-var subdir appended at runtime

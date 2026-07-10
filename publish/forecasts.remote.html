@@ -56,12 +56,18 @@
    <div class="form-group" id="season-group" style="display:none;margin-right:10px">
     <label for="fcstselectseason">Season&nbsp;</label>
     <select class="form-control" id="fcstselectseason">
+     <option>JFM</option>
+     <option>FMA</option>
      <option>MAM</option>
      <option>AMJ</option>
      <option>MJJ</option>
      <option>JJA</option>
+     <option>JAS</option>
      <option>ASO</option>
+     <option>SON</option>
+     <option>OND</option>
      <option>NDJ</option>
+     <option>DJF</option>
      <option>Apr-Jul</option>
      <option>Apr-Sep</option>
      <option>Oct-Jan</option>
@@ -206,7 +212,7 @@
     var end = _mos[(_mos.indexOf(m) + 2) % 12];
     return { value: m, text: m + "-" + end };
   });
-  var seasonTercileOptions = ["MAM","AMJ","MJJ","JJA","ASO","NDJ","Apr-Jul","Apr-Sep","Oct-Jan"];
+  var seasonTercileOptions = ["JFM","FMA","MAM","AMJ","MJJ","JJA","JAS","ASO","SON","OND","NDJ","DJF","Apr-Jul","Apr-Sep","Oct-Jan"];
 
   function populateSelect(id, options) {
     var sel = document.getElementById(id);
