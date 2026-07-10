@@ -106,6 +106,10 @@ PUBLISH_COPY_STATIC_FORCE="${PUBLISH_COPY_STATIC_FORCE:-$(cfg_get 'pipeline.publ
 PUBLISH_COPY_HTML_FORCE="${PUBLISH_COPY_HTML_FORCE:-$(cfg_get 'pipeline.publish.copy_html_force' '0')}"
 PUBLISH_STATIC_CLIMO_SRC="${PUBLISH_STATIC_CLIMO_SRC:-$(cfg_get 'pipeline.publish.static_climatology_source' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
 PUBLISH_STATIC_TERCILES_SRC="${PUBLISH_STATIC_TERCILES_SRC:-$(cfg_get 'pipeline.publish.static_terciles_source' '/data/esplab/shared/model/initialized/nmme/terciles/1991-2020')}"
+PUBLISH_STATIC_SKILL_SRC="${PUBLISH_STATIC_SKILL_SRC:-$(cfg_get 'pipeline.publish.static_skill_source' '/data/esplab/shared/model/initialized/nmme/skill/1991-2020/plots')}"
+PUBLISH_STATIC_PYCPT_SKILL_SRC="${PUBLISH_STATIC_PYCPT_SKILL_SRC:-$(cfg_get 'pipeline.publish.static_pycpt_skill_source' '/data/esplab/shared/model/initialized/nmme/skill/pycpt/plots')}"
+PUBLISH_COPY_SKILL="${PUBLISH_COPY_SKILL:-$(cfg_get 'pipeline.publish.copy_skill' '1')}"
+PUBLISH_COPY_SKILL_FORCE="${PUBLISH_COPY_SKILL_FORCE:-$(cfg_get 'pipeline.publish.copy_skill_force' '0')}"
 PUBLISH_HINDCASTS_DEST_DIR="${PUBLISH_HINDCASTS_DEST_DIR:-$(cfg_get 'pipeline.publish.hindcasts_dest_dir' '')}"
 
 PUBLISH_ENABLED="$(to_bool01 "$PUBLISH_ENABLED")"
@@ -117,6 +121,8 @@ PUBLISH_COPY_LATEST="$(to_bool01 "$PUBLISH_COPY_LATEST")"
 PUBLISH_UPDATE_HTML="$(to_bool01 "$PUBLISH_UPDATE_HTML")"
 PUBLISH_COPY_STATIC_ONCE="$(to_bool01 "$PUBLISH_COPY_STATIC_ONCE")"
 PUBLISH_COPY_STATIC_FORCE="$(to_bool01 "$PUBLISH_COPY_STATIC_FORCE")"
+PUBLISH_COPY_SKILL="$(to_bool01 "$PUBLISH_COPY_SKILL")"
+PUBLISH_COPY_SKILL_FORCE="$(to_bool01 "$PUBLISH_COPY_SKILL_FORCE")"
 
 FORECAST_ROOT="${NMME_FORECAST_ROOT:-$(cfg_get 'data.output.nmme_forecast' '/data/esplab/shared/model/initialized/nmme/forecast')}"
 
@@ -378,5 +384,49 @@ if [[ "$PUBLISH_COPY_STATIC_ONCE" == "1" ]]; then
     run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "touch '${HINDCASTS_MARKER}'"
   else
     echo "[INFO] static hindcast publish already completed; skipping (set copy_static_force=true to recopy)"
+  fi
+fi
+
+# Publish hindcast skill page (raw + pycpt plots) to hindcasts dest.
+# Uses a marker file so the large plot directories are not re-copied every month.
+# Set copy_skill_force=true (or PUBLISH_COPY_SKILL_FORCE=1) to force a re-copy
+# after regenerating plots (e.g. after adding tref or new models).
+if [[ "$PUBLISH_COPY_SKILL" == "1" ]]; then
+  HINDCASTS_SKILL_DEST="${PUBLISH_HINDCASTS_DEST_DIR%/}/skill"
+  HINDCASTS_SKILL_MARKER="${PUBLISH_HINDCASTS_DEST_DIR%/}/.skill_publish_complete"
+
+  skill_should_copy="1"
+  if [[ "$PUBLISH_COPY_SKILL_FORCE" != "1" ]]; then
+    if [[ "$PUBLISH_DRY_RUN" == "1" ]]; then
+      echo "[DRY-RUN] ssh ${PUBLISH_DEST_HOST} test -f ${HINDCASTS_SKILL_MARKER}"
+      echo "[INFO] dry-run mode cannot verify skill marker; assuming skill copy will run"
+    else
+      if ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "test -f '${HINDCASTS_SKILL_MARKER}'"; then
+        skill_should_copy="0"
+      fi
+    fi
+  fi
+
+  if [[ "$skill_should_copy" == "1" ]]; then
+    echo "[INFO] publishing skill page and plots to ${HINDCASTS_SKILL_DEST}/"
+    run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
+      "mkdir -p ${HINDCASTS_SKILL_DEST}/plots/pycpt"
+    # skill.html
+    run_cmd scp -i "${ssh_key_expanded}" \
+      "${script_dir}/skill.html" "${PUBLISH_DEST_HOST}:${PUBLISH_HINDCASTS_DEST_DIR%/}/skill.html"
+    # raw skill plots (flat dir)
+    if [[ -d "$PUBLISH_STATIC_SKILL_SRC" ]]; then
+      run_cmd scp -i "${ssh_key_expanded}" "${PUBLISH_STATIC_SKILL_SRC}/"*.png \
+        "${PUBLISH_DEST_HOST}:${HINDCASTS_SKILL_DEST}/plots/" 2>/dev/null || true
+    fi
+    # pycpt skill plots (flat dir)
+    if [[ -d "$PUBLISH_STATIC_PYCPT_SKILL_SRC" ]]; then
+      run_cmd scp -i "${ssh_key_expanded}" "${PUBLISH_STATIC_PYCPT_SKILL_SRC}/"*.png \
+        "${PUBLISH_DEST_HOST}:${HINDCASTS_SKILL_DEST}/plots/pycpt/" 2>/dev/null || true
+    fi
+    run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" "touch '${HINDCASTS_SKILL_MARKER}'"
+    echo "[INFO] Skill publish complete."
+  else
+    echo "[INFO] skill publish already completed; skipping (set copy_skill_force=true to recopy)"
   fi
 fi
