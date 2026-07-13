@@ -11,6 +11,7 @@ ENV_NAME="${ENV_NAME:-nmme_workflow_env}"
 PYCPTDIR="${PYCPTDIR:-/data/esplab/shared/model/initialized/nmme/skill/pycpt}"
 OUTDIR="${OUTDIR:-${PYCPTDIR}/plots}"
 VAR="${VAR:-prec}"
+SCORE="${SCORE:-both}"
 
 CONDA_SH="$CONDA_BASE/etc/profile.d/conda.sh"
 if [[ -f "$CONDA_SH" ]]; then
@@ -43,7 +44,7 @@ for region_dir in "${PYCPTDIR}"/*/; do
                 --season "${season}" \
                 --init-month "${init_month}" \
                 --var "${VAR}" \
-                --score both \
+                --score "${SCORE}" \
                 --pycptdir "${PYCPTDIR}" \
                 --outdir "${OUTDIR}"
         done

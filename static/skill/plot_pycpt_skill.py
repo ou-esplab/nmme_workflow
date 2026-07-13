@@ -39,8 +39,10 @@ PREFERRED_ORDER = [
 ]
 
 SCORE_META = {
-    "rpss": {"var": "rpss", "label": "RPSS", "vmin": -0.5, "vmax": 0.5, "vcenter": 0.0, "cmap": "RdBu_r"},
-    "acc":  {"var": "acc",  "label": "ACC",  "vmin": -1.0, "vmax": 1.0, "vcenter": 0.0, "cmap": "RdBu_r"},
+    "rpss": {"var": "rpss", "label": "RPSS", "vmin": -0.5, "vmax": 0.5, "vcenter": 0.0, "cmap": "RdBu_r",
+             "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5]},
+    "acc":  {"var": "acc",  "label": "ACC",  "vmin": -0.8, "vmax": 0.8, "vcenter": 0.0, "cmap": "RdBu_r",
+             "ticks": [-0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8]},
 }
 
 VAR_LABEL = {"prec": "Precipitation", "tref": "2m Temperature"}
@@ -101,6 +103,14 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _extent_from_data(da: xr.DataArray, pad: float = 0.5) -> list:
+    """Derive map extent from actual data coordinates (handles CHIRPS 50N cap)."""
+    x = da["X"].values if "X" in da.coords else da["lon"].values
+    y = da["Y"].values if "Y" in da.coords else da["lat"].values
+    return [float(x.min()) - pad, float(x.max()) + pad,
+            float(y.min()) - pad, float(y.max()) + pad]
+
+
 def _make_figure(panels, score_key: str, region: str, var: str, season: str,
                  init_month: int, extent: list, outdir: Path) -> None:
     meta = SCORE_META[score_key]
@@ -132,7 +142,8 @@ def _make_figure(panels, score_key: str, region: str, var: str, season: str,
     fig.subplots_adjust(bottom=0.10, hspace=0.20, wspace=0.05)
     if mappable is not None:
         cbar_ax = fig.add_axes([0.15, 0.04, 0.70, 0.025])
-        cbar = fig.colorbar(mappable, cax=cbar_ax, orientation="horizontal")
+        cbar = fig.colorbar(mappable, cax=cbar_ax, orientation="horizontal",
+                            ticks=meta.get("ticks"))
         cbar.set_label(meta["label"], fontsize=10)
         cbar.ax.tick_params(labelsize=8)
 
@@ -165,8 +176,10 @@ def main() -> int:
         if not panels:
             print(f"[SKIP] No data for {args.region}/{args.season}/init{args.init_month:02d}/{score_key}")
             continue
+        # Derive extent from data to handle CHIRPS 50N cap and other obs limits
+        data_extent = _extent_from_data(panels[0][1])
         _make_figure(panels, score_key, args.region, args.var, args.season,
-                     args.init_month, extent, outdir)
+                     args.init_month, data_extent, outdir)
     return 0
 
 
