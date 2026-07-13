@@ -410,14 +410,19 @@ if [[ "$PUBLISH_COPY_SKILL" == "1" ]]; then
   if [[ "$skill_should_copy" == "1" ]]; then
     echo "[INFO] publishing skill page and plots to ${HINDCASTS_SKILL_DEST}/"
     run_cmd ssh -i "${ssh_key_expanded}" "${PUBLISH_DEST_HOST}" \
-      "mkdir -p ${HINDCASTS_SKILL_DEST}/plots/pycpt"
+      "mkdir -p ${HINDCASTS_SKILL_DEST}/plots/regional ${HINDCASTS_SKILL_DEST}/plots/pycpt"
     # skill.html
     run_cmd scp -i "${ssh_key_expanded}" \
       "${script_dir}/skill.html" "${PUBLISH_DEST_HOST}:${PUBLISH_HINDCASTS_DEST_DIR%/}/skill.html"
-    # raw skill plots (flat dir)
+    # raw skill plots (global flat dir)
     if [[ -d "$PUBLISH_STATIC_SKILL_SRC" ]]; then
       run_cmd scp -i "${ssh_key_expanded}" "${PUBLISH_STATIC_SKILL_SRC}/"*.png \
         "${PUBLISH_DEST_HOST}:${HINDCASTS_SKILL_DEST}/plots/" 2>/dev/null || true
+    fi
+    # raw skill plots (regional subdir)
+    if [[ -d "${PUBLISH_STATIC_SKILL_SRC}/regional" ]]; then
+      run_cmd scp -i "${ssh_key_expanded}" "${PUBLISH_STATIC_SKILL_SRC}/regional/"*.png \
+        "${PUBLISH_DEST_HOST}:${HINDCASTS_SKILL_DEST}/plots/regional/" 2>/dev/null || true
     fi
     # pycpt skill plots (flat dir)
     if [[ -d "$PUBLISH_STATIC_PYCPT_SKILL_SRC" ]]; then
