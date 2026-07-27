@@ -30,7 +30,7 @@ for region_dir in "${PYCPTDIR}"/*/; do
     region=$(basename "$region_dir")
     [[ "$region" == "plots" ]] && continue
 
-    for season in MAM AMJ MJJ JJA ASO NDJ DJF Apr-Jul Apr-Sep Oct-Jan; do
+    for season in JFM FMA MAM AMJ MJJ JJA JAS ASO SON OND NDJ DJF Apr-Jul Apr-Sep Oct-Jan; do
         for init_month in $(seq 1 12); do
             # Check if at least one model file exists for this combination
             pattern="${region_dir}MME.${VAR}.${region}.${season}.init$(printf '%02d' ${init_month}).pycpt_skill.*.nc"

@@ -47,6 +47,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from utils import nmme_pycpt_utils as U
 from cptcore.functional import cca
 
+_VARKEY = {"prec": "precipitation", "tref": "temperature"}
+
 
 # ---------------------------------------------------------------------------
 # Season helpers (same mapping as postprocess/pycpt-seasonal_rt.py)
@@ -106,6 +108,22 @@ def _to_cptv10_predictand(Y: xr.DataArray) -> xr.DataArray:
     v10.attrs["missing"] = -9999.0
     v10.attrs["units"] = "unknown"
     return v10
+
+
+def _load_tref_obs(obs_file: str) -> xr.DataArray:
+    """Load GHCN-CAMS monthly temperature, standardize to (T, Y, X) with -180/180 lon."""
+    ds = xr.open_dataset(obs_file, decode_times=True)
+    da = ds["air"]
+    rmap = {}
+    for old, new in [("time", "T"), ("lat", "Y"), ("lon", "X")]:
+        if old in da.dims:
+            rmap[old] = new
+    if rmap:
+        da = da.rename(rmap)
+    if float(da["Y"].values[0]) > float(da["Y"].values[-1]):
+        da = da.isel(Y=slice(None, None, -1))
+    da = da.assign_coords(X=((da["X"] + 180) % 360 - 180)).sortby("X")
+    return da
 
 
 def _da_years(da: xr.DataArray) -> list[int]:
@@ -287,7 +305,7 @@ def _run_region_season(
 
     local_cfg = cfg["data"]["local"]
     root = Path(local_cfg["root"])
-    model_var = local_cfg["model_vars"]["precipitation"]
+    model_var = local_cfg["model_vars"][_VARKEY[var]]
     model_base_map = local_cfg.get("model_base", {})
     patterns = local_cfg.get("path_patterns", {})
     model_path_patterns = local_cfg.get("model_path_patterns", {})
@@ -374,8 +392,7 @@ def parse_args() -> argparse.Namespace:
         description="Compute PyCPT (CCA) bias-corrected hindcast skill (ACC, RPSS)."
     )
     p.add_argument("--config", default="confignmme.yaml")
-    p.add_argument("--var", default="prec", choices=["prec"],
-                   help="Only prec is supported for now; tref support is planned.")
+    p.add_argument("--var", default="prec", choices=["prec", "tref"])
     p.add_argument("--regions", default="ALL", help="Comma-separated region names, or ALL")
     p.add_argument("--seasons", default="ALL",
                    help="Comma-separated season codes matching confignmme.yaml, or ALL")
@@ -399,8 +416,12 @@ def main() -> int:
 
     local_cfg = cfg["data"]["local"]
     root = Path(local_cfg["root"])
-    obs_cfg = local_cfg["predictand"]
-    obs_full = U.load_predictand_local(root, obs_cfg["dir"], obs_cfg["var"])
+    if var == "prec":
+        obs_cfg = local_cfg["predictand"]
+        obs_full = U.load_predictand_local(root, obs_cfg["dir"], obs_cfg["var"])
+    else:
+        tref_cfg = local_cfg["predictand_tref"]
+        obs_full = _load_tref_obs(tref_cfg["file"])
 
     all_regions = cfg.get("regions", [])
     region_filter = None if args.regions == "ALL" else set(args.regions.split(","))

@@ -187,6 +187,11 @@ def main():
                             anom_leads.append(anom)
                         da = xr.concat(anom_leads, dim="lead")
                         da = da.mean("lead")
+                        # Pool members into sample so concat pools years × members
+                        for member_dim in ("M", "member", "ens"):
+                            if member_dim in da.dims:
+                                da = da.rename({member_dim: "sample"})
+                                break
                     else:
                         # No lead dimension, just subtract climatology for the month
                         # Always include underscore before .clim, even if lev is empty

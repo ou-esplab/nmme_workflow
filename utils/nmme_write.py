@@ -201,6 +201,10 @@ def nmme_write(ds_fcst: xr.Dataset, fcstdate: str, forecast_root: str | None = N
         # Compute seasonal means from this variable-only dataset.
         # Avoid recomputing all variables repeatedly inside the loop.
         ds_seas = rolling_seasonal_means(ds_models, window=3)
+        ds_seas.attrs = ds_models.attrs
+        for _v in ds_seas.data_vars:
+            if _v in ds_models.data_vars:
+                ds_seas[_v].attrs = ds_models[_v].attrs
         ds_seas["season"].attrs["long_name"] = "Forecast Valid Season"
 
         ofname_seas = (

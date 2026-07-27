@@ -67,6 +67,54 @@ set_var_defaults() {
                 REMOTE_VAR="${REMOTE_VAR:-SST}"
                 ZARR_DATASET="${ZARR_DATASET:-ocn_monthly.zarr}"
                 ;;
+            olr)
+                REMOTE_VAR="${REMOTE_VAR:-ulwrftoa}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            u10)
+                REMOTE_VAR="${REMOTE_VAR:-u10m}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            v10)
+                REMOTE_VAR="${REMOTE_VAR:-v10m}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            shf)
+                REMOTE_VAR="${REMOTE_VAR:-avg_ishfsfc}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            lhf)
+                REMOTE_VAR="${REMOTE_VAR:-avg_slhtfsfc}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            tau_x)
+                REMOTE_VAR="${REMOTE_VAR:-avg_utauasfc}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            tau_y)
+                REMOTE_VAR="${REMOTE_VAR:-avg_vtauasfc}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            sw_down)
+                REMOTE_VAR="${REMOTE_VAR:-uswrfsfc}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            lw_down)
+                REMOTE_VAR="${REMOTE_VAR:-dlwrfsfc}"
+                ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"
+                ;;
+            ssh)
+                REMOTE_VAR="${REMOTE_VAR:-SSH}"
+                ZARR_DATASET="${ZARR_DATASET:-ocn_monthly.zarr}"
+                ;;
+            sss)
+                REMOTE_VAR="${REMOTE_VAR:-so}"
+                ZARR_DATASET="${ZARR_DATASET:-ocn_monthly.zarr}"
+                ;;
+            ohc)
+                REMOTE_VAR="${REMOTE_VAR:-ocnheat}"
+                ZARR_DATASET="${ZARR_DATASET:-ocn_monthly.zarr}"
+                ;;
             h200)
                 REMOTE_VAR="${REMOTE_VAR:-z200}"
                 ZARR_DATASET="${ZARR_DATASET:-atm_monthly.zarr}"

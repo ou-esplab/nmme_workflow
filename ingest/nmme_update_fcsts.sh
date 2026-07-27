@@ -100,11 +100,17 @@ ONLY_MODELS="${ONLY_MODELS:-}"
 # Optional SFS AWS forecast ingest
 SFS_AWS_ENABLED="${SFS_AWS_ENABLED:-$(cfg_get 'pipeline.sfs.enabled' '1')}"
 SFS_AWS_DRY_RUN="${SFS_AWS_DRY_RUN:-$(cfg_get 'pipeline.sfs.dry_run' '0')}"
-SFS_VARS="${SFS_VARS:-$(cfg_get 'pipeline.sfs.variables' 'prec tref sst')}"
+# Backward-compatible split variable controls:
+# - forecast_variables: latest realtime forecast ingest
+# - reforecast_variables: historical reforecast sync
+# - climo_variables: optional climo refresh from local reforecast files
+# If unset, each falls back to legacy pipeline.sfs.variables.
+SFS_FORECAST_VARS="${SFS_FORECAST_VARS:-$(cfg_get 'pipeline.sfs.forecast_variables' "$(cfg_get 'pipeline.sfs.variables' 'prec tref sst')")}" 
 
-# Optional SFS reforecast sync (all vars in SFS_VARS)
+# Optional SFS reforecast sync
 SFS_REFORECAST_ENABLED="${SFS_REFORECAST_ENABLED:-$(cfg_get 'pipeline.sfs.reforecast_enabled' '1')}"
 SFS_REFORECAST_DRY_RUN="${SFS_REFORECAST_DRY_RUN:-$(cfg_get 'pipeline.sfs.reforecast_dry_run' '0')}"
+SFS_REFORECAST_VARS="${SFS_REFORECAST_VARS:-$(cfg_get 'pipeline.sfs.reforecast_variables' "$(cfg_get 'pipeline.sfs.variables' 'prec tref sst')")}" 
 SFS_REFORECAST_SCRIPT="${SFS_REFORECAST_SCRIPT:-$(cfg_get 'pipeline.sfs.reforecast_script' "${SCRIPT_DIR}/download_sfs_reforecast_prec.sh")}"
 SFS_REFORECAST_ROOT="${SFS_REFORECAST_ROOT:-$(cfg_get 'pipeline.sfs.reforecast_root' 's3://noaa-oar-sfsdev-pds/experiments/beta1/reforecast')}"
 SFS_REFORECAST_MONTHS="${SFS_REFORECAST_MONTHS:-$(cfg_get 'pipeline.sfs.reforecast_months' '')}"
@@ -115,6 +121,7 @@ SFS_REFORECAST_MAX_DOWNLOADS="${SFS_REFORECAST_MAX_DOWNLOADS:-$(cfg_get 'pipelin
 # Optional SFS climatology refresh from local reforecast files (per-var)
 SFS_CLIMO_ENABLED="${SFS_CLIMO_ENABLED:-$(cfg_get 'pipeline.sfs.climo_enabled' '1')}"
 SFS_CLIMO_PYTHON="${SFS_CLIMO_PYTHON:-$(cfg_get 'pipeline.sfs.climo_python' 'python3')}"
+SFS_CLIMO_VARS="${SFS_CLIMO_VARS:-$(cfg_get 'pipeline.sfs.climo_variables' "$SFS_FORECAST_VARS")}" 
 SFS_CLIMO_SCRIPT="${SFS_CLIMO_SCRIPT:-$(cfg_get 'pipeline.sfs.climo_script' "${PROJECT_ROOT}/static/make_sfs_climo_from_reforecast.py")}"
 SFS_CLIMO_INPUT_DIR="${SFS_CLIMO_INPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_input_dir' "${DATA_ROOT}/NOAA-SFS/reforecast/prec")}" 
 SFS_CLIMO_OUTPUT_DIR="${SFS_CLIMO_OUTPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_output_dir' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
@@ -445,8 +452,8 @@ if [[ "$NMME_LOG_LEVEL" == "debug" ]]; then
 fi
 
 if [[ "$SFS_AWS_ENABLED" == "1" ]]; then
-  log "SFS : running latest AWS SFS forecast ingest (vars: ${SFS_VARS})"
-  for sfs_var in $SFS_VARS; do
+  log "SFS : running latest AWS SFS forecast ingest (vars: ${SFS_FORECAST_VARS})"
+  for sfs_var in $SFS_FORECAST_VARS; do
     if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" VERBOSE="$SFS_SCRIPT_VERBOSE" LOCAL_VAR="$sfs_var" "${SCRIPT_DIR}/download_sfs_forecast_latest_prec.sh"; then
       log "SFS : WARN latest AWS SFS forecast ingest failed var=${sfs_var}; continuing"
     fi
@@ -456,11 +463,11 @@ else
 fi
 
 if [[ "$SFS_REFORECAST_ENABLED" == "1" ]]; then
-  log "SFS : syncing reforecast vars from AWS (vars: ${SFS_VARS})"
+  log "SFS : syncing reforecast vars from AWS (vars: ${SFS_REFORECAST_VARS})"
   if [[ ! -f "$SFS_REFORECAST_SCRIPT" ]]; then
     log "SFS : WARN reforecast script not found: ${SFS_REFORECAST_SCRIPT}; continuing"
   else
-    for sfs_var in $SFS_VARS; do
+    for sfs_var in $SFS_REFORECAST_VARS; do
       if ! DATA_ROOT="$DATA_ROOT" \
         DRY_RUN="$SFS_REFORECAST_DRY_RUN" \
         VERBOSE="$SFS_SCRIPT_VERBOSE" \
@@ -481,13 +488,13 @@ fi
 
 if [[ "$SFS_CLIMO_ENABLED" == "1" ]]; then
   if [[ "$DRY_RUN" == "1" ]]; then
-    log "SFS : [DRY RUN] would refresh climatology from local reforecast (vars: ${SFS_VARS}); skipping invocation of ${SFS_CLIMO_SCRIPT}"
+    log "SFS : [DRY RUN] would refresh climatology from local reforecast (vars: ${SFS_CLIMO_VARS}); skipping invocation of ${SFS_CLIMO_SCRIPT}"
   else
-    log "SFS : refreshing climatology from local reforecast (vars: ${SFS_VARS})"
+    log "SFS : refreshing climatology from local reforecast (vars: ${SFS_CLIMO_VARS})"
     if [[ ! -f "$SFS_CLIMO_SCRIPT" ]]; then
       log "SFS : WARN climo script not found: ${SFS_CLIMO_SCRIPT}; continuing"
     else
-      for sfs_var in $SFS_VARS; do
+      for sfs_var in $SFS_CLIMO_VARS; do
         case "$sfs_var" in
           tref) sfs_lev="2m" ;;
           *) sfs_lev="sfc" ;;

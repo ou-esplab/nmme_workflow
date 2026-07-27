@@ -50,8 +50,8 @@ MODEL_DIR_MAP = {
 }
 
 FORECAST_VAR_TO_TERCILE_VAR = {
-    "prec": "prec_sfc",
-    "tref": "tref_2m",
+    "prec": "prec",
+    "tref": "tref",
 }
 
 TERCILE_FORECAST_VARS = ("prec", "tref")
@@ -263,7 +263,7 @@ def hindcast_thresholds_for_model(
     lon_bounds: Tuple[float, float],
     hind_root: Path,
     sfs_hind_root: Path,
-    var: str = "prec_sfc",
+    var: str = "prec",
 ) -> Tuple[xr.DataArray, xr.DataArray]:
     """
     Load precomputed hindcast tercile threshold files and return regional T33/T66 maps.
@@ -274,26 +274,11 @@ def hindcast_thresholds_for_model(
     """
     tercile_dir = Path("/data/esplab/shared/model/initialized/nmme/terciles/1991-2020/")
 
-    # Some models use level-suffixed variable names; others use legacy short names.
-    var_candidates = [var]
-    legacy_map = {"prec_sfc": "prec", "tref_2m": "tref", "sst_sfc": "sst"}
-    if var in legacy_map:
-        var_candidates.append(legacy_map[var])
-    if var == "sst_sfc":
-        var_candidates.append("SST")
-
-    tercile_file = None
-    for vname in var_candidates:
-        candidate = tercile_dir / f"{model_name}.{vname}.{season}.terciles.1991-2020.nc"
-        if candidate.exists():
-            tercile_file = candidate
-            break
-
-    if tercile_file is None:
-        tried = [f"{model_name}.{v}.{season}.terciles.1991-2020.nc" for v in var_candidates]
+    tercile_file = tercile_dir / f"{model_name}.{var}.{season}.terciles.1991-2020.nc"
+    if not tercile_file.exists():
         raise FileNotFoundError(
             f"Tercile file not found for model={model_name}, season={season}, var={var}. "
-            f"Tried: {tried}"
+            f"Expected: {tercile_file}"
         )
 
     ds = xr.open_dataset(tercile_file)
@@ -1030,7 +1015,20 @@ def main() -> int:
                     continue
 
                 out_nc = tercile_outdir / f"NMME_{args.init}_{rname}_{season}_{var}_tercile_probs.nc"
-                xr.Dataset(prob).to_netcdf(out_nc)
+                prob_out = {
+                    "BN": prob["BN"].assign_attrs(long_name="Below Normal probability", units="%"),
+                    "NN": prob["NN"].assign_attrs(long_name="Near Normal probability", units="%"),
+                    "AN": prob["AN"].assign_attrs(long_name="Above Normal probability", units="%"),
+                }
+                ds_out = xr.Dataset(prob_out)
+                ds_out.attrs = {
+                    "title": f"NMME tercile probabilities {args.init}",
+                    "region": rname,
+                    "season": season,
+                    "variable": var,
+                    "source": "NMME MME",
+                }
+                ds_out.to_netcdf(out_nc)
                 print(f"[INFO] Wrote {out_nc}")
 
                 # -------------------------------------------------------------

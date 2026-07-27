@@ -98,9 +98,14 @@ data:
       dir: /data/esplab/shared/obs/gridded/atm/precip/daily/chirps-v2.0/p25
       var: precip
 
+    predictand_tref:
+      file: /data/esplab/shared/obs/gridded/atm/temperature/monthly/air.mon.mean.nc
+      var: air
+
     # The variable name used in your model NetCDF directory & file prefix
     model_vars:
       precipitation: prec
+      temperature: tref
 
     # Only needed if some models use a different folder name than the YAML ID
     # If your folders match the IDs, you can delete this entire block.
