@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-# Export the latest NOAA SFS beta1 forecast init from AWS Zarr
+# Export the latest NOAA SFS beta2 forecast init from AWS Zarr
 # to NetCDF named like existing model forecast files:
 #   <var>_NOAA-SFS_YYYY_MM.nc
 # Output layout:
@@ -14,7 +14,7 @@ TYPE="${TYPE:-forecast}"
 LOCAL_VAR="${LOCAL_VAR:-prec}"
 REMOTE_VAR="${REMOTE_VAR:-}"
 ZARR_DATASET="${ZARR_DATASET:-}"
-S3_FORECAST_ROOT="${S3_FORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta1/forecast}"
+S3_FORECAST_ROOT="${S3_FORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta2/forecast}"
 SFS_CYCLE="${SFS_CYCLE:-}"
 S3_ZARR_URL="${S3_ZARR_URL:-}"
 DRY_RUN="${DRY_RUN:-0}"

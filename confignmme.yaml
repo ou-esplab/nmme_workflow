@@ -51,6 +51,12 @@ regions:
     seasons: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF, Apr-Jul, Apr-Sep, Oct-Jan]
     plot: {clon: 67, mproj: pcarree, state_colors: gray}
 
+  - name: E.Africa
+    lat: [-5, 15]
+    lon: [33, 51]
+    seasons: [JFM, FMA, MAM, AMJ, MJJ, JJA, JAS, ASO, SON, OND, NDJ, DJF, Apr-Jul, Apr-Sep, Oct-Jan]
+    plot: {clon: 42, mproj: pcarree, state_colors: gray}
+
 # ------------------------------------------------------------
 # PyCPT Configuration (used when pycpt stage is active)
 # ------------------------------------------------------------
@@ -83,6 +89,8 @@ pycpt:
     - name: Venezuela
 
     - name: C.Asia
+
+    - name: E.Africa
 
 
 # ------------------------------------------------------------
@@ -162,7 +170,7 @@ pipeline:
     reforecast_enabled: true
     reforecast_dry_run: false
     reforecast_script: ./ingest/download_sfs_reforecast_prec.sh
-    reforecast_root: s3://noaa-oar-sfsdev-pds/experiments/beta1/reforecast
+    reforecast_root: s3://noaa-oar-sfsdev-pds/experiments/beta2/reforecast
     reforecast_months: ""
     reforecast_start_year: 1991
     reforecast_end_year: 2100

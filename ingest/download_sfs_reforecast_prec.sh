@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-# Sync NOAA-SFS beta1 reforecast variables from AWS Zarr month stores
+# Sync NOAA-SFS beta2 reforecast variables from AWS Zarr month stores
 # into local NetCDF files named like the existing convention:
 #   <var>_NOAA-SFS_YYYY_MM.nc
 
@@ -12,7 +12,7 @@ TYPE="${TYPE:-reforecast}"
 LOCAL_VAR="${LOCAL_VAR:-prec}"
 REMOTE_VAR="${REMOTE_VAR:-}"
 ZARR_DATASET="${ZARR_DATASET:-}"
-S3_REFORECAST_ROOT="${S3_REFORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta1/reforecast}"
+S3_REFORECAST_ROOT="${S3_REFORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta2/reforecast}"
 MONTHS="${MONTHS:-}"
 START_YEAR="${START_YEAR:-1991}"
 END_YEAR="${END_YEAR:-2100}"
