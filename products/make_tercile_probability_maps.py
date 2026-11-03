@@ -40,6 +40,7 @@ from utils.config import load_config
 # Model names in forecast output -> hindcast directory names.
 MODEL_DIR_MAP = {
     "NASA-GEOSS2S": "NASA-GEOSS2S",
+    "NASA-GEOSS2S3": "NASA-GEOSS2S3",
     "CanESM5": "CanESM5",
     "GEM5.2-NEMO": "GEM5.2-NEMO",
     "NCEP-CFSv2": "NCEP-CFSv2",

@@ -106,7 +106,8 @@ SFS_VARS="${SFS_VARS:-$(cfg_get 'pipeline.sfs.variables' 'prec tref sst')}"
 SFS_REFORECAST_ENABLED="${SFS_REFORECAST_ENABLED:-$(cfg_get 'pipeline.sfs.reforecast_enabled' '1')}"
 SFS_REFORECAST_DRY_RUN="${SFS_REFORECAST_DRY_RUN:-$(cfg_get 'pipeline.sfs.reforecast_dry_run' '0')}"
 SFS_REFORECAST_SCRIPT="${SFS_REFORECAST_SCRIPT:-$(cfg_get 'pipeline.sfs.reforecast_script' "${SCRIPT_DIR}/download_sfs_reforecast_prec.sh")}"
-SFS_REFORECAST_ROOT="${SFS_REFORECAST_ROOT:-$(cfg_get 'pipeline.sfs.reforecast_root' 's3://noaa-oar-sfsdev-pds/experiments/beta2/reforecast')}"
+SFS_REFORECAST_ROOT="${SFS_REFORECAST_ROOT:-$(cfg_get 'pipeline.sfs.reforecast_root' 's3://noaa-oar-sfsdev-pds/experiments/beta3/reforecast')}"
+SFS_FORECAST_ROOT="${SFS_FORECAST_ROOT:-$(cfg_get 'pipeline.sfs.forecast_root' 's3://noaa-oar-sfsdev-pds/experiments/beta3/forecast')}"
 SFS_REFORECAST_MONTHS="${SFS_REFORECAST_MONTHS:-$(cfg_get 'pipeline.sfs.reforecast_months' '')}"
 SFS_REFORECAST_START_YEAR="${SFS_REFORECAST_START_YEAR:-$(cfg_get 'pipeline.sfs.reforecast_start_year' '1991')}"
 SFS_REFORECAST_END_YEAR="${SFS_REFORECAST_END_YEAR:-$(cfg_get 'pipeline.sfs.reforecast_end_year' '2100')}"
@@ -120,6 +121,11 @@ SFS_CLIMO_INPUT_DIR="${SFS_CLIMO_INPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_input_
 SFS_CLIMO_OUTPUT_DIR="${SFS_CLIMO_OUTPUT_DIR:-$(cfg_get 'pipeline.sfs.climo_output_dir' '/data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020')}"
 SFS_CLIMO_START_YEAR="${SFS_CLIMO_START_YEAR:-$(cfg_get 'pipeline.sfs.climo_start_year' '1991')}"
 SFS_CLIMO_END_YEAR="${SFS_CLIMO_END_YEAR:-$(cfg_get 'pipeline.sfs.climo_end_year' '2020')}"
+
+# Optional NASA GEOS-S2S-3 direct ingest from GMAO's NRT portal
+GEOSV3_ENABLED="${GEOSV3_ENABLED:-$(cfg_get 'pipeline.geos_v3.enabled' '1')}"
+GEOSV3_VARS="${GEOSV3_VARS:-$(cfg_get 'pipeline.geos_v3.forecast_variables' 'prec tref sst')}"
+GEOSV3_PYTHON="${GEOSV3_PYTHON:-$(cfg_get 'pipeline.geos_v3.python' 'python3')}"
 
 # A top-level DRY_RUN overrides/short-circuits the config-driven SFS toggles
 # so a full pipeline dry run engages SFS dry-run without separate config edits.
@@ -439,6 +445,30 @@ done
 
 log "All model updates complete."
 
+# NASA GEOS-S2S-3 comes directly from GMAO's NRT portal (not IRIDL); see
+# ingest/download_geos_v3_nmme.py. A month GMAO hasn't posted yet exits 0.
+GEOSV3_MODEL="NASA-GEOSS2S3"
+if [[ -n "$ONLY_MODELS" && " $ONLY_MODELS " != *" $GEOSV3_MODEL "* ]]; then
+  log "GEOSV3: skipped (not in ONLY_MODELS)"
+elif [[ "$GEOSV3_ENABLED" == "1" ]]; then
+  geosv3_args=(--config "$NMME_CONFIG" --data-root "$DATA_ROOT" --vars "$GEOSV3_VARS")
+  if [[ "$DRY_RUN" == "1" ]]; then
+    geosv3_args+=(--dry-run)
+  fi
+  y=$win_y; m=$win_m
+  while (( y<curr_y || (y==curr_y && m<=curr_m) )); do
+    printf -v geosv3_init "%04d%02d" "$y" "$m"
+    log "GEOSV3: ingest init=${geosv3_init} (vars: ${GEOSV3_VARS})"
+    if ! PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" "$GEOSV3_PYTHON" "${SCRIPT_DIR}/download_geos_v3_nmme.py" \
+      "${geosv3_args[@]}" --init-yyyymm "$geosv3_init"; then
+      log "GEOSV3: WARN ingest failed init=${geosv3_init}; continuing"
+    fi
+    m=$((m+1)); if (( m>12 )); then m=1; y=$((y+1)); fi
+  done
+else
+  log "GEOSV3: disabled (set GEOSV3_ENABLED=1 to enable)"
+fi
+
 SFS_SCRIPT_VERBOSE=0
 if [[ "$NMME_LOG_LEVEL" == "debug" ]]; then
   SFS_SCRIPT_VERBOSE=1
@@ -447,7 +477,7 @@ fi
 if [[ "$SFS_AWS_ENABLED" == "1" ]]; then
   log "SFS : running latest AWS SFS forecast ingest (vars: ${SFS_VARS})"
   for sfs_var in $SFS_VARS; do
-    if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" VERBOSE="$SFS_SCRIPT_VERBOSE" LOCAL_VAR="$sfs_var" "${SCRIPT_DIR}/download_sfs_forecast_latest_prec.sh"; then
+    if ! DATA_ROOT="$DATA_ROOT" DRY_RUN="$SFS_AWS_DRY_RUN" VERBOSE="$SFS_SCRIPT_VERBOSE" LOCAL_VAR="$sfs_var" S3_FORECAST_ROOT="$SFS_FORECAST_ROOT" EXPECTED_CYCLE="$(printf '%04d%02d' "$curr_y" "$curr_m")" "${SCRIPT_DIR}/download_sfs_forecast_latest_prec.sh"; then
       log "SFS : WARN latest AWS SFS forecast ingest failed var=${sfs_var}; continuing"
     fi
   done

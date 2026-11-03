@@ -106,7 +106,7 @@ Static one-time stages (no `--init` needed):
 
 ### SFS AWS Forecast Ingest (prec, tref, sst)
 
-The ingest stage now also pulls the latest NOAA SFS beta1 AWS forecast
+The ingest stage now also pulls the latest NOAA SFS beta3 AWS forecast (beta3 from the Nov 2026 forecast on)
 for precipitation, 2m temperature, and SST into:
 
 ```bash
@@ -122,14 +122,18 @@ SFS_AWS_ENABLED=0
 # run SFS in metadata-only mode
 SFS_AWS_DRY_RUN=1
 
-# override forecast root or cycle
-S3_FORECAST_ROOT=s3://noaa-oar-sfsdev-pds/experiments/beta1/forecast
-SFS_CYCLE=202603
+# override forecast root (config: pipeline.sfs.forecast_root) or cycle
+S3_FORECAST_ROOT=s3://noaa-oar-sfsdev-pds/experiments/beta3/forecast
+SFS_CYCLE=202611
+# the pipeline sets EXPECTED_CYCLE to the target month; if the root's latest cycle
+# is a different month the forecast is NOT exported (exit 3, "not posted yet")
 
 # disable/enable SFS climo refresh
 SFS_CLIMO_ENABLED=1
 
-# disable/enable SFS reforecast sync (prec only)
+# disable/enable SFS reforecast sync. Files record their source root (attr
+# `source_root`); a file from a different root (e.g. beta2) is re-downloaded for
+# any month the current root provides, so no manual force-refresh on a source switch
 SFS_REFORECAST_ENABLED=1
 SFS_REFORECAST_DRY_RUN=0
 
@@ -157,6 +161,55 @@ reforecast files can be incorporated into the climo update in the same run.
 
 SST mapping detail: SFS SST is sourced from
 `ocn_monthly.zarr` variable `SST`.
+
+### NASA GEOS-S2S-3 Direct Ingest (prec, tref, sst)
+
+NASA GEOS-S2S-3 (model ID `NASA-GEOSS2S3`) runs alongside the IRIDL-fed
+`NASA-GEOSS2S` (v2). It is downloaded directly from GMAO, not IRIDL:
+
+| | Source | Script |
+|---|---|---|
+| Real-time | `https://portal.nccs.nasa.gov/datashare/gmao/geos-s2s-3/NRT/NMME/monthly/{mon}{yyyy}/` | `ingest/download_geos_v3_nmme.py` (run by `ingest/nmme_update_fcsts.sh`) |
+| Hindcast | `https://data.nas.nasa.gov/geos-s2s-3/NMME/{yyyy}/{mon}/{var}.nc` (1991 to 2024-09) | `static/download_geos_v3_nmme_hindcast.py` (one-time) |
+
+Both write the standard layout
+`<DATA_ROOT>/NASA-GEOSS2S3/{forecast,hindcast}/<var>/<var>_NASA-GEOSS2S3_YYYY_MM.nc`,
+regridded to the 181x360 1-degree grid. Shared logic is in `utils/geos_v3.py`.
+
+- **Members:** each real-time month folder holds lagged 5-day inits from the
+  previous month. Only the 10 (init, ens) pairs that run all 9 leads (the NMME
+  ensemble) are kept; GMAO's extra 2-lead members are ignored.
+- **Hindcasts are ensemble mean only** (`M` has length 1). They are fine for
+  climatology but not for tercile thresholds or RPSS, so `NASA-GEOSS2S3` is
+  **not** in `confignmme.yaml` `models:` yet. It still enters the anomaly and
+  MME products through `utils/nmme_metadata.init_models()`, and it is skipped
+  (with a WARN) in tercile probabilities because it has no tercile file.
+- **No heights:** GMAO's height files are mislabeled (real-time `z500` holds
+  200 hPa; hindcast `h500`/`h200` hold 450/150 hPa). The scripts check the
+  in-file `lev` and refuse mismatches, so h500/h200 will work unchanged once
+  GMAO fixes the files.
+- **Posting status (2026-09-27):** the real-time `NMME/monthly/` folder only
+  has `jun2025/`. A month that is not posted returns 404, which the ingest logs
+  and treats as success.
+
+Controls (env vars override `pipeline.geos_v3` in `confignmme.yaml`):
+
+```bash
+GEOSV3_ENABLED=0                  # disable
+GEOSV3_VARS="prec tref sst"       # variables to ingest
+GEOSV3_PYTHON=python3             # interpreter (needs xarray)
+```
+
+One-time hindcast download and climatology (run in `screen`):
+
+```bash
+python static/download_geos_v3_nmme_hindcast.py --config confignmme.yaml
+for v in prec:sfc tref:2m sst:sfc; do
+  python static/make_sfs_climo_from_reforecast.py --model NASA-GEOSS2S3 --local-var ${v%%:*} \
+    --input-dir /data/esplab/nmme-backup/NASA-GEOSS2S3/hindcast/${v%%:*} \
+    --output-file /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020/NASA-GEOSS2S3.${v%%:*}_${v##*:}.clim.1991-2020.nc
+done
+```
 
 ### Example
 

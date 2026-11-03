@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-# Export the latest NOAA SFS beta2 forecast init from AWS Zarr
+# Export the latest NOAA SFS (beta3) forecast init from AWS Zarr
 # to NetCDF named like existing model forecast files:
 #   <var>_NOAA-SFS_YYYY_MM.nc
 # Output layout:
@@ -14,8 +14,10 @@ TYPE="${TYPE:-forecast}"
 LOCAL_VAR="${LOCAL_VAR:-prec}"
 REMOTE_VAR="${REMOTE_VAR:-}"
 ZARR_DATASET="${ZARR_DATASET:-}"
-S3_FORECAST_ROOT="${S3_FORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta2/forecast}"
+S3_FORECAST_ROOT="${S3_FORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta3/forecast}"
 SFS_CYCLE="${SFS_CYCLE:-}"
+# Optional YYYYMM: refuse to export if the latest cycle at the root is a different month.
+EXPECTED_CYCLE="${EXPECTED_CYCLE:-}"
 S3_ZARR_URL="${S3_ZARR_URL:-}"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-0}"
@@ -186,7 +188,7 @@ PY
     return 0
     fi
 
-  py_out="$(python3 - "$S3_FORECAST_ROOT" "$SFS_CYCLE" "$S3_ZARR_URL" "$REMOTE_VAR" "$ZARR_DATASET" "$LOCAL_VAR" "$OUTDIR" "$MODEL" "$FORCE_OVERWRITE" <<'PY'
+  py_out="$(EXPECTED_CYCLE="${EXPECTED_CYCLE:-}" python3 - "$S3_FORECAST_ROOT" "$SFS_CYCLE" "$S3_ZARR_URL" "$REMOTE_VAR" "$ZARR_DATASET" "$LOCAL_VAR" "$OUTDIR" "$MODEL" "$FORCE_OVERWRITE" <<'PY'
 
 import os
 import sys
@@ -207,7 +209,11 @@ else:
     if cycle:
         cycle_used = cycle
     else:
-        cycle_dirs = fs.ls(root)
+        try:
+            cycle_dirs = fs.ls(root)
+        except FileNotFoundError:
+            print(f"ERROR: {s3_root} does not exist yet; no forecast exported")
+            raise SystemExit(3)
         cycles = sorted(
             [
                 p.rstrip("/").split("/")[-1]
@@ -216,8 +222,15 @@ else:
             ]
         )
         if not cycles:
-            raise RuntimeError(f"No forecast cycles found under {s3_root}")
+            print(f"ERROR: no forecast cycles under {s3_root} yet; no forecast exported")
+            raise SystemExit(3)
         cycle_used = cycles[-1]
+        # Refuse to silently export an older cycle when a specific month was expected.
+        expected = os.environ.get("EXPECTED_CYCLE", "")
+        if expected and cycle_used != expected:
+            print(f"ERROR: latest cycle under {s3_root} is {cycle_used}, expected {expected}; "
+                  f"{expected} not posted yet, no forecast exported")
+            raise SystemExit(3)
     zarr_url = f"s3://{root}/{cycle_used}/{zarr_dataset}"
 
 try:

@@ -310,6 +310,7 @@ Hindcast-based reference data is available for the following models:
 |-------|--------|-----------|
 | NASA-GEOSS2S | NASA | prec, tref, sst, h200, h500 |
 | CanESM5 | Environment and Climate Change Canada | prec, tref, sst, h200, h500 |
+| NASA-GEOSS2S3 | NASA (GEOS-S2S-3) | prec, tref, sst (climatology only; no tercile thresholds yet) |
 | GEM5.2-NEMO | Environment and Climate Change Canada | prec, tref, sst, h200, h500 |
 | NCEP-CFSv2 | NOAA/NCEP | prec, tref, sst, h200, h500 |
 | NCAR-CESM1 | NCAR | prec, tref, sst, h200, h500 |

@@ -13,6 +13,12 @@ models:
   - COLA-RSMAS-CCSM4
   - COLA-RSMAS-CESM1
   - NOAA-SFS
+  # NASA-GEOSS2S3 (GEOS-S2S-3) is intentionally NOT listed here yet. This list
+  # also drives terciles, ACC/RPSS skill, PyCPT and ArrayLake. Member-level
+  # hindcasts are now available (monthly_native, 2026-10), so add it here once they
+  # are downloaded, validated, and the v3 climatology is rebuilt from the members.
+  # v3 is still ingested (pipeline.geos_v3) and enters the anomaly/MME products via
+  # utils/nmme_metadata.init_models().
 
 
 # ------------------------------------------------------------
@@ -170,7 +176,10 @@ pipeline:
     reforecast_enabled: true
     reforecast_dry_run: false
     reforecast_script: ./ingest/download_sfs_reforecast_prec.sh
-    reforecast_root: s3://noaa-oar-sfsdev-pds/experiments/beta2/reforecast
+    # beta3 from the Nov 2026 forecast on. Reforecast files remember their source root
+    # and are re-downloaded when it changes; beta3 so far only has reforecast month 11.
+    forecast_root: s3://noaa-oar-sfsdev-pds/experiments/beta3/forecast
+    reforecast_root: s3://noaa-oar-sfsdev-pds/experiments/beta3/reforecast
     reforecast_months: ""
     reforecast_start_year: 1991
     reforecast_end_year: 2100
@@ -184,6 +193,18 @@ pipeline:
     climo_output_dir: /data/esplab/shared/model/initialized/nmme/climatology/monthly/1991-2020
     climo_start_year: 1991
     climo_end_year: 2020
+  # NASA GEOS-S2S-3 (model ID NASA-GEOSS2S3), fetched directly from GMAO.
+  # Real-time: ingest/download_geos_v3_nmme.py (run from ingest/nmme_update_fcsts.sh).
+  # Hindcast:  static/download_geos_v3_nmme_hindcast.py (one-time; 10 members, 1991-2020).
+  # Hindcast + RT are member-level native 0.5-deg, subsampled to 1 deg. Heights come
+  # from the z500/z200 files; extract_field refuses any file whose in-file level is
+  # wrong (GMAO's earlier height files were mislabeled).
+  geos_v3:
+    enabled: true
+    forecast_variables: "prec tref sst h500 h200"
+    hindcast_variables: "prec tref sst h500 h200"
+    rt_url: https://portal.nccs.nasa.gov/datashare/gmao/geos-s2s-3/NRT/NMME/monthly/
+    hindcast_url: https://data.nas.nasa.gov/geos-s2s-3/NMME/ensembles/monthly_native/
   publish:
     enabled: true
     dry_run: false

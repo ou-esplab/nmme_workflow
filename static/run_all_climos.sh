@@ -3,6 +3,7 @@
 
 declare -A MODELS
 MODELS[NASA-GEOSS2S]="prec tref sst h500 h200"
+MODELS[NASA-GEOSS2S3]="prec tref sst h500 h200"   # GEOS-S2S-3; member-level 0.5deg->1deg hindcast, 1991-2020
 MODELS[CanESM5]="prec tref sst h500 h200"
 MODELS[GEM5.2-NEMO]="prec tref sst h500 h200"
 MODELS[NCEP-CFSv2]="prec tref sst h500 h200"

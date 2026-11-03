@@ -181,6 +181,8 @@ def main() -> int:
         # Used when a model's climo files need to be (re)generated.
         _model_vars = {
             "NASA-GEOSS2S":    {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
+            # Member-level 0.5deg->1deg hindcast (1991-2020). h500/h200 data now exist (utils/geos_v3.py) but are not enabled here yet.
+            "NASA-GEOSS2S3":   {"vars": ["prec","tref","sst"],               "end_year": 2020},
             "CanESM5":         {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
             "GEM5.2-NEMO":     {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},
             "NCEP-CFSv2":      {"vars": ["prec","tref","sst","h500","h200"], "end_year": 2020},

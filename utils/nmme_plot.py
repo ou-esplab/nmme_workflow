@@ -15,6 +15,7 @@ from utils.nmme_metadata import init_models
 
 PREFERRED_MODEL_ORDER = [
     "NASA-GEOSS2S",
+    "NASA-GEOSS2S3",
     "CanESM5",
     "GFDL-SPEAR",
     "GEM5.2-NEMO",
@@ -149,7 +150,14 @@ def _build_model_plot_locs(ds):
     ordered = [m for m in PREFERRED_MODEL_ORDER if m in present]
     extras = [m for m in present if m not in ordered]
     ordered.extend(extras)
-    return {m: i for i, m in enumerate(ordered[:9])}
+    return {m: i for i, m in enumerate(_fit_panels(ordered))}
+
+
+def _fit_panels(ordered, npanels=9):
+    """Trim to the 3x3 grid without ever dropping MME (it always takes the last used slot)."""
+    if "MME" not in ordered or len(ordered) <= npanels:
+        return ordered[:npanels]
+    return [m for m in ordered if m != "MME"][: npanels - 1] + ["MME"]
 
 
 def _balanced_levels_and_ticks(var_params):
@@ -394,7 +402,7 @@ def nmme_plot_seasonal(seas_dir, figpath, fcstdate, land_mask_path=None):
         norm = TwoSlopeNorm(vmin=clevs[0], vcenter=0.0, vmax=clevs[-1])
         ticks = clevs
         models_ordered = [m for m in PREFERRED_MODEL_ORDER if m in ds_seas.data_vars]
-        model_plot_locs = {m: i for i, m in enumerate(models_ordered[:9])}
+        model_plot_locs = {m: i for i, m in enumerate(_fit_panels(models_ordered))}
 
         _month_abbrevs = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 

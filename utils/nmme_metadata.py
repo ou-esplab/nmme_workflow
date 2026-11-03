@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Tuple
 def init_models() -> Tuple[List[Dict[str, Any]], Dict[str, str], List[str], Dict[str, str]]:
     models = [
         {"model":"NASA-GEOSS2S", "varnames":["prec","tref","sst","h500","h200"], "levstrs":["sfc","2m","sfc","500","200"]},
+        {"model":"NASA-GEOSS2S3", "varnames":["prec","tref","sst"], "levstrs":["sfc","2m","sfc"]},
         {"model":"CanESM5",      "varnames":["prec","tref","sst","h500","h200"], "levstrs":["sfc","2m","sfc","500","200"]},
         {"model":"GEM5.2-NEMO",  "varnames":["prec","tref","sst","h500","h200"], "levstrs":["sfc","2m","sfc","500","200"]},
         {"model":"NCEP-CFSv2",   "varnames":["prec","tref","sst","h500","h200"], "levstrs":["sfc","2m","sfc","500","200"]},

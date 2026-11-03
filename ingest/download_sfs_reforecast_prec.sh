@@ -2,9 +2,13 @@
 
 set -euo pipefail
 
-# Sync NOAA-SFS beta2 reforecast variables from AWS Zarr month stores
+# Sync NOAA-SFS reforecast variables (currently beta3) from AWS Zarr month stores
 # into local NetCDF files named like the existing convention:
 #   <var>_NOAA-SFS_YYYY_MM.nc
+# Each file records the S3 root it came from (global attr `source_root`). An existing
+# file is skipped only if that matches the current root, so switching the SFS source
+# (beta1 -> beta2 -> beta3) refreshes the months the new root provides instead of
+# leaving the old model's data cached. Files with no `source_root` count as stale.
 
 DATA_ROOT="${DATA_ROOT:-/data/esplab/nmme-backup}"
 MODEL="${MODEL:-NOAA-SFS}"
@@ -12,7 +16,7 @@ TYPE="${TYPE:-reforecast}"
 LOCAL_VAR="${LOCAL_VAR:-prec}"
 REMOTE_VAR="${REMOTE_VAR:-}"
 ZARR_DATASET="${ZARR_DATASET:-}"
-S3_REFORECAST_ROOT="${S3_REFORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta2/reforecast}"
+S3_REFORECAST_ROOT="${S3_REFORECAST_ROOT:-s3://noaa-oar-sfsdev-pds/experiments/beta3/reforecast}"
 MONTHS="${MONTHS:-}"
 START_YEAR="${START_YEAR:-1991}"
 END_YEAR="${END_YEAR:-2100}"
@@ -155,6 +159,17 @@ max_downloads = int(max_downloads)
 
 fs = s3fs.S3FileSystem(anon=True)
 root = s3_root.replace("s3://", "").rstrip("/")
+source_root = s3_root.rstrip("/")
+
+
+def cached_source(path):
+    """source_root attr of an existing local file (None if absent or unreadable)."""
+    try:
+        with xr.open_dataset(path, decode_times=False) as cached:
+            return cached.attrs.get("source_root")
+    except Exception:
+        return None
+
 
 if months_csv.strip():
     month_dirs = [m.strip().zfill(2) for m in months_csv.split(",") if m.strip()]
@@ -171,6 +186,7 @@ else:
 requested = 0
 downloaded = 0
 existing = 0
+refreshed_stale = 0
 failed = 0
 processed_months = []
 
@@ -223,8 +239,10 @@ for month in month_dirs:
         requested += 1
 
         if os.path.exists(outfile) and not force_overwrite:
-            existing += 1
-            continue
+            if cached_source(outfile) == source_root:
+                existing += 1
+                continue
+            refreshed_stale += 1
 
         if dry_run:
             print(f"DRY_RUN: would write {outfile} from {zarr_url} init={init_day}")
@@ -247,6 +265,7 @@ for month in month_dirs:
                 da = da.expand_dims(init=[np.datetime64(init_day)])
 
             out = da.to_dataset(name=local_var)
+            out.attrs["source_root"] = source_root
             tmpfile = outfile + ".part"
             encoding = {
                 local_var: {
@@ -273,7 +292,7 @@ for month in month_dirs:
     if max_downloads > 0 and downloaded >= max_downloads:
         break
 
-print(f"SUMMARY requested={requested} downloaded={downloaded} existing={existing} failed={failed} months={processed_months}")
+print(f"SUMMARY requested={requested} downloaded={downloaded} existing={existing} refreshed_stale={refreshed_stale} failed={failed} months={processed_months}")
 PY
   )"
 
