@@ -62,7 +62,13 @@ def _build_runtime_config() -> dict:
     parser.add_argument("--config", required=True, help="Path to workflow confignmme.yaml")
     parser.add_argument("--date", default=None, help="Optional target init date YYYYMM or YYYYMMDD")
     parser.add_argument("--dry-run", action="store_true", help="Scan pending updates without writing")
+    parser.add_argument("--refresh-existing", action="store_true",
+                        help="Overwrite variables in an init slot that already exists (use with --date and "
+                             "--only-model); e.g. to backfill a variable that was NaN-padded on an earlier run")
+    parser.add_argument("--only-model", default=None, help="Process only this model name")
     args = parser.parse_args()
+    if args.refresh_existing and not (args.date and args.only_model):
+        parser.error("--refresh-existing requires --date and --only-model")
 
     with open(args.config, encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle) or {}
@@ -88,6 +94,8 @@ def _build_runtime_config() -> dict:
         "models": models,
         "date_filter": _normalize_date(args.date),
         "dry_run": bool(args.dry_run or os.environ.get("ARRAYLAKE_DRY_RUN") == "1"),
+        "refresh_existing": bool(args.refresh_existing),
+        "only_model": args.only_model,
         "config_path": os.path.abspath(args.config),
     }
     if not runtime["input_path"]:
@@ -111,6 +119,8 @@ datatype = runtime["datatype"]
 branch_name = runtime["branch_name"]
 target_date = runtime["date_filter"]
 dry_run = runtime["dry_run"]
+refresh_existing = runtime["refresh_existing"]
+only_model = runtime["only_model"]
 cfg_variables = list(runtime["variables"])
 allowed_variables = set(cfg_variables)
 arraylake_model_vars = runtime.get("model_vars") or {}
@@ -172,6 +182,8 @@ models_to_process = []
 for model in runtime["models"]:
     name = model.get("name")
     if not name:
+        continue
+    if only_model and name != only_model:
         continue
     if name in skip_models:
         logger.info("Skipping %s: listed in arraylake.skip_models", name)
@@ -267,7 +279,7 @@ for entry in models_to_process:
         if target_date:
             date_in_filename = f"{target_date[:4]}_{target_date[4:]}"
             files = [path for path in files if date_in_filename in path.name]
-        if group_exists and variable in existing_vars:
+        if group_exists and variable in existing_vars and not refresh_existing:
             max_existing = pd.Timestamp(existing_times.max()).strftime("%Y%m") if len(existing_times) else "000000"
             def _file_yyyymm(p):
                 parts = p.stem.split("_")
@@ -346,6 +358,32 @@ for entry in models_to_process:
         if len(existing_L) != ds_allvars.sizes.get("L", 0):
             logger.warning("L size mismatch: new=%d existing=%d — reindexing to existing L", ds_allvars.sizes.get("L", 0), len(existing_L))
             ds_allvars = ds_allvars.reindex(L=existing_L)
+
+    if refresh_existing:
+        # Overwrite the already-existing init slot(s) in place; nothing is appended.
+        if not group_exists:
+            logger.error("--refresh-existing: group %s does not exist; nothing to refresh", group_name)
+            continue
+        refresh_times = pd.Index(ds_allvars["S"].values)
+        idx = existing_times.get_indexer(refresh_times)
+        if (idx < 0).any() or not (np.diff(idx) == 1).all():
+            logger.error("--refresh-existing: init times %s are not a contiguous existing range in %s",
+                         list(refresh_times), group_name)
+            continue
+        refresh_vars = [v for v in ds_allvars.data_vars if v in existing_vars]
+        region = {"S": slice(int(idx[0]), int(idx[-1]) + 1)}
+        logger.info("--refresh-existing: %s vars=%s S=%s region=%s", group_name, refresh_vars,
+                    [pd.Timestamp(t).strftime("%Y%m") for t in refresh_times], region)
+        if dry_run:
+            logger.info("[DRY RUN] Would overwrite the slot above; no write performed")
+            continue
+        # Region writes need every variable to carry the region dim, so drop all coordinates.
+        sub = ds_allvars[refresh_vars].drop_vars(list(ds_allvars.coords))
+        sub = sub.chunk({"L": len(ds_allvars["L"]), "Y": len(ds_allvars["Y"]), "X": len(ds_allvars["X"]), "M": 1, "S": 1})
+        write_session = repo.writable_session(branch_name)
+        sub.to_zarr(write_session.store, zarr_format=3, consolidated=False, mode="r+", region=region, group=group_name)
+        write_session.commit(f"Refresh {','.join(refresh_vars)} for {group_name} {refresh_times[0]:%Y%m}")
+        continue
 
     # Pad any existing zarr variables that have no new data with NaN slabs so that
     # append_dim="S" keeps all variable S-sizes consistent.  Without this, a model
