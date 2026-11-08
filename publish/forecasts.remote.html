@@ -186,15 +186,15 @@
  <script>
   // Monthly: variable -> { varPrefix, regions[] }
   var monthlyVars = {
-    "2m Temp": { varPrefix: "2mTemp", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
-    "Precip":  { varPrefix: "Precip", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "2m Temp": { varPrefix: "2mTemp", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia","E.Africa"] },
+    "Precip":  { varPrefix: "Precip", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia","E.Africa"] },
     "SST":     { varPrefix: "SST",    regions: ["Global"] }
   };
 
   // Seasonal anomalies (raw model rolling 3-month means): variable -> { varPrefix, regions[] }
   var seasonalAnomalyVars = {
-    "2m Temp": { varPrefix: "2mTemp", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
-    "Precip":  { varPrefix: "Precip", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia"] },
+    "2m Temp": { varPrefix: "2mTemp", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia","E.Africa"] },
+    "Precip":  { varPrefix: "Precip", regions: ["Global","NorthAmerica","CONUS","Iran","Venezuela","Mexico","C.Asia","E.Africa"] },
     "SST":     { varPrefix: "SST",    regions: ["Global"] }
   };
 
@@ -204,8 +204,8 @@
     "Temperature":   "tref"
   };
 
-  var seasonalRegions = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
-  var pycptRegions    = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"];
+  var seasonalRegions = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia", "E.Africa"];
+  var pycptRegions    = ["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia", "E.Africa"];
 
   var _mos = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   var seasonMonthOptions = _mos.map(function(m) {

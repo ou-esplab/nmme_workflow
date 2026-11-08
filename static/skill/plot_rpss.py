@@ -73,6 +73,7 @@ REGION_BOUNDS = {
     "Iran":      (24,     40,       40,    64,   40,   64),
     "Venezuela": ( 0,     13,      -73,   -60,  287,  300),
     "C.Asia":    (28.39,  55.55,   45.53, 88.33, 45.53, 88.33),
+    "E.Africa":  (-5,     15,      33,    51,   33,   51),
 }
 
 # Diverging colormap: 0 = climatology, positive = skilful, negative = unskillful

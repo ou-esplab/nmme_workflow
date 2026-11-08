@@ -93,7 +93,7 @@ def _plot_panel(ax, da: xr.DataArray, title: str, extent: list, meta: dict) -> o
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Plot PyCPT skill maps.")
     p.add_argument("--region",     required=True,
-                   choices=["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia"])
+                   choices=["CONUS", "Mexico", "Iran", "Venezuela", "C.Asia", "E.Africa"])
     p.add_argument("--season",     required=True)
     p.add_argument("--init-month", required=True, type=int, choices=range(1, 13), metavar="1-12")
     p.add_argument("--var",        default="prec", choices=["prec", "tref"])
@@ -167,6 +167,7 @@ def main() -> int:
         "Iran":      [  40,  64,  24,  40],
         "Venezuela": [ -73, -60,   0,  13],
         "C.Asia":    [  45,  88,  28,  56],
+        "E.Africa":  [  33,  51,  -5,  15],
     }
     extent = EXTENTS[args.region]
 

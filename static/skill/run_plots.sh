@@ -57,7 +57,7 @@ for var in ${VARS}; do
 done
 
 # Regional subsets of the raw skill (one region × init_month × season_lead per PNG)
-REGIONS="${REGIONS:-CONUS Mexico Iran Venezuela C.Asia}"
+REGIONS="${REGIONS:-CONUS Mexico Iran Venezuela C.Asia E.Africa}"
 
 _plot_score_regional() {
     local score="$1" var="$2" plot_script="$3" metric="$4" region="$5"

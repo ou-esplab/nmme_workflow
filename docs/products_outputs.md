@@ -18,7 +18,7 @@ uses the local `arraylake/.env` token file when present.
 Products are available for:
 
 - **Variables:** Precipitation, 2-meter Temperature, SST
-- **Regions:** CONUS, Venezuela, Iran, Mexico, C.Asia
+- **Regions:** CONUS, Venezuela, Iran, Mexico, C.Asia, E.Africa
 - **Seasons:** 3-month rolling windows (e.g., MAM, AMJ); displayed in `Mon-Mon` format in PyCPT outputs (e.g., `Mar-May`, `Apr-Jun`)
 - **Climatological baseline:** 1991–2020
 
@@ -127,7 +127,7 @@ forecast can translate to a strong BN or AN signal in some regions.
 
 **How to read it:** Similar to raw anomaly and tercile maps but based on CCA-corrected forecasts. Typically shows more physically consistent spatial patterns than raw ensemble means.
 
-**Available for:** Configured pycpt regions (CONUS, Mexico, Venezuela, Iran, C.Asia) and seasons listed in `confignmme.yaml`. Currently only `prec` is bias-corrected.
+**Available for:** Configured pycpt regions (CONUS, Mexico, Venezuela, Iran, C.Asia, E.Africa) and seasons listed in `confignmme.yaml`. Currently only `prec` is bias-corrected.
 
 ---
 
@@ -172,6 +172,7 @@ means in physical units for each region and season.
 | Iran | Iran and neighboring countries |
 | Mexico | Mexico and the southwestern United States |
 | C.Asia | Central Asia (28°N–56°N, 46°E–88°E) |
+| E.Africa | Horn of Africa: Ethiopia, Somalia, Djibouti, Eritrea, N. Kenya (5°S–15°N, 33°E–51°E) |
 
 ---
 
@@ -309,8 +310,8 @@ Hindcast-based reference data is available for the following models:
 | Model | Center | Variables |
 |-------|--------|-----------|
 | NASA-GEOSS2S | NASA | prec, tref, sst, h200, h500 |
-| CanESM5 | Environment and Climate Change Canada | prec, tref, sst, h200, h500 |
 | NASA-GEOSS2S3 | NASA (GEOS-S2S-3) | prec, tref, sst (climatology only; no tercile thresholds yet) |
+| CanESM5 | Environment and Climate Change Canada | prec, tref, sst, h200, h500 |
 | GEM5.2-NEMO | Environment and Climate Change Canada | prec, tref, sst, h200, h500 |
 | NCEP-CFSv2 | NOAA/NCEP | prec, tref, sst, h200, h500 |
 | NCAR-CESM1 | NCAR | prec, tref, sst, h200, h500 |
